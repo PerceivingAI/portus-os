@@ -8,6 +8,8 @@ The system is designed around a simple operating model: the user communicates in
 
 The first public target is **PortusOS 0.1.0 Technical Preview** for **x86_64 VMware**.
 
+**Current build frontier (2026-08-29):** the canonical public-repository native build has reached real Artix bootfs assembly. Run `20260829T060019Z-3afadb080c36-dev-first-live` completed rootfs/livefs package construction, installed both `linux-lts` and `linux`, generated their installed initramfs state, and generated the `linux-lts` live initramfs. It then failed because locked `artools 0.39.1-1` attempted to copy `/run/artools/livefs/boot/memtest86+/memtest.bin`, which is absent from the current boot package set. Native cleanup evidence passed with no leaked current-run mounts/process references/seed loop devices. No candidate ISO has been produced or accepted yet.
+
 This repository contains the PortusOS source, build harness, installer integration, machine-readable contracts, validation tooling, release tooling, and public technical documentation. The Technical Preview remains subject to the acceptance and release gates documented in `docs/ACCEPTANCE.md`, `docs/VALIDATION.md`, and `docs/RELEASE.md`.
 
 PortusOS-owned source is licensed under the **Apache License 2.0**. Third-party components retain their own upstream licences and redistribution obligations. See `LICENSE` and `THIRD_PARTY.md`.

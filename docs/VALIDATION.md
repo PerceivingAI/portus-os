@@ -1,7 +1,7 @@
 # PortusOS First-ISO Validation Authority
 
-**Last reviewed:** 2026-08-29T01:24:50Z
-**Last updated:** 2026-08-29T01:24:50Z
+**Last reviewed:** 2026-08-29T06:22:02Z
+**Last updated:** 2026-08-29T06:22:02Z
 
 **Status:** Authoritative executable validation contract for the first ISO
 **Acceptance scope:** ISO-01 through ISO-38 from `docs/ACCEPTANCE.md`
@@ -721,6 +721,8 @@ A useful partially passing candidate remains a development artifact but is not t
 ## 21. Pre-RC Linux resolution gates
 
 Before the first candidate can run this matrix end-to-end, the supported Artix/native build and installed-system verification path must freeze the exact identities that remain intentionally unresolved, including as applicable:
+
+The current public native build has already proved real rootfs/livefs construction, both installed kernel lines, and `linux-lts` live-initramfs generation. It has **not** yet produced a candidate ISO: `artools 0.39.1-1` currently stops during bootfs assembly because `/run/artools/livefs/boot/memtest86+/memtest.bin` is absent. Before candidate validation begins, that dependency/optional-asset contract must be resolved through tracked build inputs or a verified fail-closed compatibility seam, and the canonical build must then prove final squashfs/ISO creation and checksum evidence.
 
 - Artix repository/keyring/build snapshot and `artools` entry point;
 - exact Calamares modules/package identities;

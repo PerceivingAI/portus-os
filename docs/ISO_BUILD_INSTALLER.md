@@ -1,7 +1,7 @@
 # PortusOS ISO Build and Installer Contract
 
-**Last reviewed:** 2026-08-29T01:24:50Z
-**Last updated:** 2026-08-29T01:24:50Z
+**Last reviewed:** 2026-08-29T06:22:02Z
+**Last updated:** 2026-08-29T06:22:02Z
 
 **Status:** Authoritative for the first-ISO `artools`/Calamares architecture and installer engineering baseline; Artix Calamares 3.4.2-4, the verified-gap `portus-storage` module and its runtime target/credential input surface are implemented, while live loading/destructive VM proof and complete native ISO output remain verification
 **Target:** First accepted x86_64 VMware development ISO
@@ -90,6 +90,8 @@ For the current first-ISO path, the isolated context bootstrap is concretely def
 The same helper makes native construction noninteractive by contract. It verifies the installed `buildiso`/`basestrap` relationship immediately before execution: buildiso may not opt into basestrap `-i`, and basestrap must retain its default pacman `--noconfirm` path. `buildiso` then runs with stdin set to `/dev/null`. The first real native run exposed pacman's normal `:: Proceed with installation? [Y/n]` display while `/proc` showed the actual pacman argv already contained `--noconfirm`; future builds therefore require no operator response at that point and will fail closed if the Artix tooling contract changes.
 
 The live medium and installed-system kernel sets intentionally differ. The installable rootfs retains both the normal/default `linux-lts` kernel and alternate `linux` kernel. Verified `artools 0.39.1-1` assumes one rootfs kernel when constructing `/iso/boot`, so the adapter locks `live_boot_kernel_package: linux-lts` and applies a fail-closed compatibility patch only to the run-scoped Artix `buildiso` copy. That patch selects `vmlinuz-linux-lts`, derives its exact module version from the unique `pkgbase=linux-lts` module tree visible in temporary bootfs, and supplies that version only to the temporary live-initramfs path. It does not remove or rewrite either installed kernel.
+
+This kernel compatibility path now has real native evidence. Public run `20260829T060019Z-3afadb080c36-dev-first-live` installed both `linux 7.1.9.artix1-2` and `linux-lts 6.18.46-1`, generated the installed initramfs artifacts, selected the LTS module tree for the live path, and generated `/run/artools/bootfs/boot/initramfs-x86_64.img`. The run then failed at the next bootfs step because `artools 0.39.1-1` attempted to copy `/run/artools/livefs/boot/memtest86+/memtest.bin` and the current profile does not supply that asset. This is now the immediate ISO-build compatibility/input-resolution gate. The fix must be derived from the verified Artix package/profile contract—required package versus genuinely optional upstream asset—not from an ad hoc placeholder file.
 
 ## 3. First-ISO installer model
 

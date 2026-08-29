@@ -1,10 +1,10 @@
 # PortusOS ISO Build Harness
 
-**Last reviewed:** 2026-08-29T01:24:50Z
+**Last reviewed:** 2026-08-29T06:22:02Z
 
 **Status:** Authoritative for repeated PortusOS ISO build orchestration, build-configuration semantics, per-attempt logging/metadata, artifact capture, and the handoff from repository source to the native Artix ISO adapter.
 
-**Last reconciled:** 2026-08-28T18:58:08Z
+**Last reconciled:** 2026-08-29T06:22:02Z
 
 **ISO architecture authority:** `docs/ISO_BUILD_INSTALLER.md`
 
@@ -538,7 +538,7 @@ exit 78
 status = blocked
 ```
 
-Used for mandatory environment blockers other than dirty source and for unresolved native-build prerequisites. Historical clean checkpoint `7aca133` reached **`32 PASS / 2 WARN / 0 BLOCK`** before the native adapter existed. The first complete cold staging run from clean revision `4e01a55` reached **`35 PASS / 2 WARN / 0 BLOCK`**, completed `first-iso-staging` successfully for Portus, Codex, PortusBrowser, Portus MCP and tunnel-client, and then returned `78` only because the owner sudo ticket was not current. A direct `portus-build build-iso` without a run-owned staging manifest also intentionally returns `78`. The first sudo-authorized native attempt later reached the actual private Artix mount operation and exposed historical cross-namespace reuse of the canonical OverlayFS upper/work pair; run-scoped upper/work isolation plus cross-namespace pre/post cleanup verification now prevent that class of recurrence. The next runtime proof is the next real `artools buildiso` execution, not adapter implementation.
+Used for mandatory environment blockers other than dirty source and for unresolved native-build prerequisites. Historical clean checkpoint `7aca133` reached **`32 PASS / 2 WARN / 0 BLOCK`** before the native adapter existed. The first complete cold staging run from clean revision `4e01a55` completed `first-iso-staging` successfully for Portus, Codex, PortusBrowser, Portus MCP and tunnel-client, then returned `78` only because the owner sudo ticket was not current. A direct `portus-build build-iso` without a run-owned staging manifest also intentionally returns `78`. Later native runs proved the private Artix execution path and motivated run-scoped upper/work isolation plus cross-namespace pre/post cleanup verification. Native execution is no longer an unresolved capability; current unresolved native facts are specific build-input/tooling contracts such as the `artools 0.39.1-1` memtest bootfs expectation.
 
 ### Other build failure
 
@@ -632,21 +632,28 @@ Credentials needed after boot are provisioned through their own runtime/setup bo
 
 ## 19. Current implementation boundary
 
-The config-driven iteration harness is implemented and the **native Artix mapping is now locked**. The repository knows the verified isolated context, `artools` 0.39.1 interface, `portus` profile layout, fixed `buildiso` arguments, selected package set, OpenRC service identities, live-session path, and expected ISO output naming.
+The config-driven iteration harness and **native Artix execution path are implemented**. The repository knows the verified isolated context, `artools 0.39.1-1` interface, `portus` profile layout, fixed `buildiso` arguments, selected package set, OpenRC service identities, live-session path, expected ISO output naming, run-scoped privilege boundary, and cleanup proof contract.
 
-The remaining boundary is **native execution and payload staging**, not adapter discovery or build-input freezing. `portus-build build-iso` still deliberately stops before invoking the real `buildiso` process because the execution branch has not yet been implemented. The mandatory environment preflight now has zero blockers on the clean frozen-input checkpoint, so the harness demonstrably reaches this execution boundary through the normal config-driven path.
+The current implementation frontier is **late native bootfs/final-ISO construction**, not adapter discovery, payload staging, or native process invocation. Public-repository run `20260829T060019Z-3afadb080c36-dev-first-live` on source commit `3afadb0` reached real `buildiso`, completed rootfs/livefs package installation, retained both installed kernels, generated installed initramfs artifacts, selected `linux-lts` for the live kernel, and generated its live initramfs. `buildiso` then exited nonzero while assembling bootfs because it attempted to copy `/run/artools/livefs/boot/memtest86+/memtest.bin`, which is absent from the current tracked boot package set. `native-cleanup.json` passed with zero current-run mount/process/seed-loop leakage and removal of the run-scoped Artix context.
 
-The expected progression is now:
+The supported progression is therefore:
 
 ```text
 config/source capture
   -> mandatory environment preflight
-  -> locked Codex + PortusBrowser input gates
+  -> locked component input gates
   -> configured repository tests
   -> contract report + build plan
   -> run-owned Artix workspace/profile/payload staging
-  -> native buildiso execution inside the verified Artix context
+  -> native buildiso inside the verified Artix context
+  -> rootfs/livefs + installed dual-kernel initramfs
+  -> linux-lts live initramfs
+  -> bootfs assembly [current memtest dependency blocker]
+  -> squashfs/final ISO construction
   -> exactly one ISO under PORTUS_BUILD_ARTIFACT_DIR
+  -> ISO SHA-256 + final run evidence
 ```
 
-Blocked runs remain valid build-history records and should remain inspectable. When native execution is implemented, the same config-driven entry point remains the normal interface; callers must not learn or maintain a separate manual `buildiso` sequence.
+The next correction must determine the exact locked Artix contract for the memtest asset: either add the required official package to the tracked boot input set or, if upstream `buildiso` is proven to assume an optional asset incorrectly, extend the narrow fail-closed compatibility seam. Do not bypass the error with an untracked file or manual build-root mutation.
+
+Blocked and failed runs remain valid build-history records and should remain inspectable. The config-driven entry point remains the normal interface; callers must not learn or maintain a separate manual `buildiso` sequence. The privileged cleanup contract removes the run-scoped Artix context and proves no leaked mounts/process references/seed loops, but failed `artools` construction may still leave root-owned run workspace/chroot data for diagnosis. Reclaim such failed-run disk usage only after proving no live references and preserving the run ledger/evidence required for regression analysis.

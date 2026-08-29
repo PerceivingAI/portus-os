@@ -1,10 +1,10 @@
 # PortusOS ISO Build Environment Requirements
 
-**Last reviewed:** 2026-08-29T01:24:50Z
+**Last reviewed:** 2026-08-29T06:22:02Z
 
 **Status:** Authoritative for the environment prerequisites that must be satisfied before the PortusOS ISO harness may enter native ISO construction.
 
-**Last reconciled:** 2026-08-28T18:58:08Z
+**Last reconciled:** 2026-08-29T06:22:02Z
 
 **Build-harness authority:** `BUILD_HARNESS.md`
 
@@ -267,25 +267,17 @@ The harness must always report free bytes on the filesystem containing the gener
 
 ### 5.4 Current outer-host observation
 
-Observed on 2026-08-28 for the current EndeavourOS VM:
+Current reference observations for the expanded EndeavourOS VMware build host:
 
 ```text
-Linux 7.1.8-arch1-3 x86_64
-git 2.55.0
-Python 3.14.7
-GNU bash 5.3.15
-rustc 1.97.1
-cargo 1.97.1
-rustfmt 1.9.0-stable
-clippy 0.1.97
-curl 8.21.0
-sudo 1.9.17p2
-13.9 GiB free immediately before the first complete cold payload-staging pass; approximately 11.46 GiB remained after staging, and approximately 12.57 GiB remained after deleting only that failed run's disposable native workspace while retaining caches/evidence
+root filesystem usable size: approximately 68.6 GiB
+operator-reported free space immediately before public native run 20260829T060019Z-3afadb080c36-dev-first-live: approximately 32 GiB
+free space after that failed bootfs-stage run, measured from filesystem blocks: approximately 21.7 GiB
 ```
 
-The command/toolchain portion of the current outer host is suitable. The observed free space is below the recommended 30-GiB headroom and should be treated as a build-risk warning until the real `artools` working-set requirement is measured.
+The public run entered real `artools` construction and failed for the memtest bootfs input issue rather than disk exhaustion. The post-failure filesystem remains below the recommended 30-GiB headroom because failed `artools` construction can retain large root-owned run workspace/chroot data even after the privileged Artix-context cleanup has safely removed mount/process/loop references. Before another full retry, reclaim only verified-dead failed-run workspace while preserving the run ledger/evidence and reusable caches needed for diagnosis/repeatability.
 
-This observation is evidence, not a permanent version pin.
+The command/toolchain portion of the current outer host remains suitable. These resource observations are evidence, not a permanent hard free-space floor; the final minimum still requires peak-working-set evidence from successful complete builds.
 
 ---
 
@@ -599,7 +591,7 @@ This makes environment regressions comparable across ISO iterations in the same 
 
 The current checker covers the outer Linux/x86_64 boundary, non-root harness execution, Python/Git/shell/Rust/tool availability, Rust minimum, rustfmt/Clippy requirement based on configured test depth, selected source paths, config identity, source cleanliness, bounded-root writability, disk/CPU/memory observation, explicit Artix-repository contamination on a non-Artix host, privilege-command availability, verified Artix seed/context identity, pacman/keyring state, repository synchronization, `artools`/`buildiso` evidence, locked adapter mapping, selected official-Artix package identities, Codex/PortusBrowser freeze state, and locked Portus-MCP/tunnel identities.
 
-On clean commit `7aca133`, after freezing Codex `0.150.1` and PortusBrowser revision `c263c3997b4e6f2f7df5922e062a9e949e22f755`, the canonical `first-live` environment preflight produced **`32 PASS / 2 WARN / 0 BLOCK`**. The warnings were ~15.0 GiB free versus the provisional 30-GiB recommended headroom and the still-unlocked exact cold/warm network-cache closure. The harness then passed its configured repository tests/contract/build-plan work and reached the native-execution implementation boundary.
+Historical checkpoint `7aca133` produced **`32 PASS / 2 WARN / 0 BLOCK`** before native execution was implemented. The current public-repository path has moved beyond that boundary. On commit `3afadb0`, canonical run `20260829T060019Z-3afadb080c36-dev-first-live` passed the supported preflight/staging path, entered real Artix `buildiso`, completed rootfs/livefs package construction, installed both required kernels, generated installed initramfs artifacts, and generated the selected `linux-lts` live initramfs. It then failed during bootfs assembly when `artools 0.39.1-1` attempted to copy `/run/artools/livefs/boot/memtest86+/memtest.bin`, which the current tracked boot package set does not provide. Cleanup evidence passed, so the current unresolved environment/build-input question is the exact memtest boot dependency/optional-asset contract, not native execution availability.
 
 ---
 
@@ -623,7 +615,7 @@ The broad environment boundary and core Artix L2 build facts are now locked. The
 Codex target-installed-version + full Artix/OpenRC runtime compatibility proof
 PortusBrowser Artix packaging/native-messaging/runtime proof at the frozen revision
 signed-Calamares live loading plus destructive blank-VM/cleanup/logging/installed-boot proof of the implemented `notesqml` -> `portus-storage` preflight/prepare/finalize path
-first native buildiso execution, generated package-lock evidence and repeat-build behavior
+closure of the `artools 0.39.1-1` bootfs `memtest86+/memtest.bin` expectation, then final ISO generation, generated package-lock evidence and repeat-build behavior
 Portus MCP Artix packaging/live launch proof
 pinned tunnel-client Artix/live compatibility proof
 remaining P16 installed ownership/service/filesystem evidence
