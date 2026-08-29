@@ -38,6 +38,25 @@ STAGING_EVIDENCE_FILE = "staging-evidence.json"
 NATIVE_BUILD_RESULT_FILE = "native-build-result.json"
 NATIVE_CLEANUP_FILE = "native-cleanup.json"
 REPOSITORY_CLOSURE_FILE = "repository-closure.json"
+PACKAGE_PROGRESS_STATES = {
+    "pending",
+    "reused_verified",
+    "downloaded_verified",
+    "corrupt_removed",
+    "failed",
+}
+PACKAGE_ACQUISITION_FAILURE_CLASSES = {
+    "verification_incomplete",
+    "interrupted",
+    "timeout",
+    "http_not_found",
+    "tls",
+    "dns",
+    "connection",
+    "integrity",
+    "process_failed",
+    "runtime_error",
+}
 MIN_INSTALLER_PLAN_DISK_MIB = 40960
 MAX_INSTALLER_PLAN_DISK_MIB = 1048576
 SECRET_MARKERS = (
@@ -272,6 +291,132 @@ def load_build_config(repo: Path, supplied_path: str) -> tuple[dict[str, Any], P
     return config, resolved, relative, raw, hashlib.sha256(raw).hexdigest()
 
 
+def validate_package_progress_evidence(report: dict[str, Any]) -> dict[str, Any] | None:
+    """Validate A5 package-level closure progress when present, including failed runs."""
+    has_progress = "package_progress" in report or "progress_summary" in report
+    if not has_progress:
+        return None
+    progress = report.get("package_progress")
+    summary = report.get("progress_summary")
+    if not isinstance(progress, list) or not isinstance(summary, dict):
+        raise ValueError("repository closure package progress evidence is malformed")
+    packages = report.get("packages")
+    if not isinstance(packages, list):
+        raise ValueError("repository closure package progress lacks package identities")
+    packages_by_filename: dict[str, dict[str, Any]] = {}
+    for package in packages:
+        if not isinstance(package, dict):
+            raise ValueError("repository closure package identity is malformed")
+        filename = package.get("filename")
+        size_bytes = package.get("size_bytes")
+        if (
+            not isinstance(filename, str)
+            or not filename
+            or filename in packages_by_filename
+            or not isinstance(size_bytes, int)
+            or isinstance(size_bytes, bool)
+            or size_bytes < 0
+        ):
+            raise ValueError("repository closure package identity cannot support progress accounting")
+        packages_by_filename[filename] = package
+
+    state_totals = {
+        state: {"packages": 0, "bytes": 0}
+        for state in PACKAGE_PROGRESS_STATES
+    }
+    verified_packages = verified_bytes = pending_packages = pending_bytes = 0
+    progress_filenames: set[str] = set()
+    for record in progress:
+        if not isinstance(record, dict):
+            raise ValueError("repository closure package progress record is malformed")
+        filename = record.get("filename")
+        state = record.get("state")
+        size_bytes = record.get("size_bytes")
+        verified = record.get("verified")
+        needs_acquisition = record.get("needs_acquisition")
+        if (
+            not isinstance(filename, str)
+            or filename not in packages_by_filename
+            or filename in progress_filenames
+            or state not in PACKAGE_PROGRESS_STATES
+            or not isinstance(size_bytes, int)
+            or isinstance(size_bytes, bool)
+            or size_bytes < 0
+            or not isinstance(verified, bool)
+            or not isinstance(needs_acquisition, bool)
+        ):
+            raise ValueError("repository closure package progress record has invalid state fields")
+        package = packages_by_filename[filename]
+        for key in ("repository", "name", "version", "filename", "size_bytes"):
+            if record.get(key) != package.get(key):
+                raise ValueError("repository closure package progress identity drifted from frozen package evidence")
+        if state in {"reused_verified", "downloaded_verified"}:
+            if verified is not True or needs_acquisition is not False:
+                raise ValueError("verified package progress state has inconsistent flags")
+        elif verified is not False or needs_acquisition is not True:
+            raise ValueError("unresolved package progress state has inconsistent flags")
+        failure_class = record.get("failure_class")
+        batch = record.get("batch")
+        attempt = record.get("attempt")
+        mirror = record.get("mirror")
+        if state == "reused_verified":
+            if any(value is not None for value in (batch, attempt, mirror, failure_class)):
+                raise ValueError("reused package progress unexpectedly carries acquisition-attempt state")
+        elif state == "downloaded_verified":
+            if (
+                not isinstance(batch, int)
+                or isinstance(batch, bool)
+                or batch < 1
+                or not isinstance(attempt, int)
+                or isinstance(attempt, bool)
+                or attempt < 1
+                or not isinstance(mirror, str)
+                or not mirror.startswith("https://")
+                or failure_class is not None
+            ):
+                raise ValueError("downloaded package progress lacks valid acquisition-attempt evidence")
+        elif state == "failed":
+            if (
+                failure_class not in PACKAGE_ACQUISITION_FAILURE_CLASSES
+                or not isinstance(batch, int)
+                or isinstance(batch, bool)
+                or batch < 1
+                or not isinstance(attempt, int)
+                or isinstance(attempt, bool)
+                or attempt < 1
+                or not isinstance(mirror, str)
+                or not mirror.startswith("https://")
+            ):
+                raise ValueError("failed package progress lacks valid acquisition-attempt evidence")
+        elif any(value is not None for value in (batch, attempt, mirror, failure_class)):
+            raise ValueError("unattempted package progress unexpectedly carries acquisition-attempt state")
+        progress_filenames.add(filename)
+        state_totals[state]["packages"] += 1
+        state_totals[state]["bytes"] += size_bytes
+        if verified:
+            verified_packages += 1
+            verified_bytes += size_bytes
+        if needs_acquisition:
+            pending_packages += 1
+            pending_bytes += size_bytes
+    if progress_filenames != set(packages_by_filename):
+        raise ValueError("repository closure package progress does not cover the frozen package graph")
+
+    expected_summary = {
+        "display": f"{len(progress)} resolved / {verified_packages} verified / {pending_packages} pending",
+        "resolved": {
+            "packages": len(progress),
+            "bytes": sum(record["size_bytes"] for record in progress),
+        },
+        "verified": {"packages": verified_packages, "bytes": verified_bytes},
+        "pending": {"packages": pending_packages, "bytes": pending_bytes},
+        "states": state_totals,
+    }
+    if summary != expected_summary:
+        raise ValueError("repository closure package progress summary disagrees with package states")
+    return expected_summary
+
+
 def validate_repository_closure_report(report: Any, run_id: str) -> str:
     if not isinstance(report, dict):
         raise ValueError("repository closure report must be a JSON object")
@@ -291,7 +436,7 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
         "local_validation",
         "failure",
     }
-    allowed = required | {"repository_anchor"}
+    allowed = required | {"repository_anchor", "package_progress", "progress_summary"}
     if not required.issubset(report) or not set(report).issubset(allowed):
         raise ValueError("repository closure report keys differ from the locked evidence shape")
     if report.get("schema_version") != SCHEMA_VERSION or report.get("run_id") != run_id:
@@ -303,11 +448,19 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
         raise ValueError("repository closure package_targets must be non-empty")
     if not isinstance(report.get("repositories"), list) or not isinstance(report.get("packages"), list):
         raise ValueError("repository closure repositories/packages must be lists")
+    progress_summary = validate_package_progress_evidence(report)
     if status == "pass":
         if report.get("failure") is not None:
             raise ValueError("passing repository closure report contains a failure")
         if not report["packages"] or len(report["repositories"]) != 3:
             raise ValueError("passing repository closure report lacks frozen package/repository evidence")
+        if (
+            progress_summary is None
+            or progress_summary["resolved"]["packages"] != len(report["packages"])
+            or progress_summary["verified"]["packages"] != len(report["packages"])
+            or progress_summary["pending"]["packages"] != 0
+        ):
+            raise ValueError("passing repository closure report lacks complete per-package progress evidence")
         anchor = report.get("repository_anchor")
         selected_anchor = anchor.get("selected") if isinstance(anchor, dict) else None
         if (
@@ -405,8 +558,15 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
             attempt_number = attempt.get("attempt")
             mirror = attempt.get("mirror")
             requested_count = attempt.get("requested_count")
+            requested_bytes = attempt.get("requested_bytes")
+            requested_filenames = attempt.get("requested_filenames")
             verified_count = attempt.get("verified_count")
+            verified_bytes = attempt.get("verified_bytes")
+            verified_filenames = attempt.get("verified_filenames")
             attempt_pending_count = attempt.get("pending_count")
+            attempt_pending_bytes = attempt.get("pending_bytes")
+            attempt_pending_filenames = attempt.get("pending_filenames")
+            failure_class = attempt.get("failure_class")
             if (
                 not isinstance(batch, int)
                 or isinstance(batch, bool)
@@ -422,14 +582,55 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
                 or not isinstance(requested_count, int)
                 or isinstance(requested_count, bool)
                 or requested_count < 1
+                or not isinstance(requested_bytes, int)
+                or isinstance(requested_bytes, bool)
+                or requested_bytes < 0
+                or not isinstance(requested_filenames, list)
+                or len(requested_filenames) != requested_count
+                or not all(isinstance(filename, str) and filename for filename in requested_filenames)
+                or len(set(requested_filenames)) != len(requested_filenames)
+                or not all(filename in package_filenames for filename in requested_filenames)
+                or requested_bytes != sum(
+                    package["size_bytes"]
+                    for package in report["packages"]
+                    if package["filename"] in set(requested_filenames)
+                )
                 or not isinstance(verified_count, int)
                 or isinstance(verified_count, bool)
                 or verified_count < 0
                 or verified_count > requested_count
+                or not isinstance(verified_bytes, int)
+                or isinstance(verified_bytes, bool)
+                or verified_bytes < 0
+                or not isinstance(verified_filenames, list)
+                or len(verified_filenames) != verified_count
+                or not all(isinstance(filename, str) and filename for filename in verified_filenames)
+                or len(set(verified_filenames)) != len(verified_filenames)
+                or not set(verified_filenames).issubset(set(requested_filenames))
+                or verified_bytes != sum(
+                    package["size_bytes"]
+                    for package in report["packages"]
+                    if package["filename"] in set(verified_filenames)
+                )
                 or not isinstance(attempt_pending_count, int)
                 or isinstance(attempt_pending_count, bool)
                 or attempt_pending_count < 0
+                or not isinstance(attempt_pending_bytes, int)
+                or isinstance(attempt_pending_bytes, bool)
+                or attempt_pending_bytes < 0
+                or not isinstance(attempt_pending_filenames, list)
+                or len(attempt_pending_filenames) != attempt_pending_count
+                or not all(isinstance(filename, str) and filename for filename in attempt_pending_filenames)
+                or len(set(attempt_pending_filenames)) != len(attempt_pending_filenames)
+                or not set(attempt_pending_filenames).issubset(set(requested_filenames))
+                or attempt_pending_bytes != sum(
+                    package["size_bytes"]
+                    for package in report["packages"]
+                    if package["filename"] in set(attempt_pending_filenames)
+                )
                 or attempt.get("result") not in {"pass", "fail"}
+                or (attempt.get("result") == "pass" and failure_class is not None)
+                or (attempt.get("result") == "fail" and failure_class not in PACKAGE_ACQUISITION_FAILURE_CLASSES)
                 or not isinstance(attempt.get("removed_unverified"), list)
             ):
                 raise ValueError("passing repository closure report contains malformed bounded mirror-attempt evidence")
@@ -801,7 +1002,45 @@ def self_test() -> int:
                 "pacman_config_sha256": "e" * 64,
             },
             "repositories": [{"name": name} for name in ("system", "world", "galaxy")],
-            "packages": [{"name": "base", "filename": "base-1-1-x86_64.pkg.tar.zst", "cached_before": False}],
+            "packages": [
+                {
+                    "repository": "system",
+                    "name": "base",
+                    "version": "1-1",
+                    "filename": "base-1-1-x86_64.pkg.tar.zst",
+                    "size_bytes": 100,
+                    "cached_before": False,
+                }
+            ],
+            "package_progress": [
+                {
+                    "repository": "system",
+                    "name": "base",
+                    "version": "1-1",
+                    "filename": "base-1-1-x86_64.pkg.tar.zst",
+                    "size_bytes": 100,
+                    "state": "downloaded_verified",
+                    "verified": True,
+                    "needs_acquisition": False,
+                    "batch": 1,
+                    "attempt": 1,
+                    "mirror": "https://mirror.example/artix/$repo/os/$arch",
+                    "failure_class": None,
+                }
+            ],
+            "progress_summary": {
+                "display": "1 resolved / 1 verified / 0 pending",
+                "resolved": {"packages": 1, "bytes": 100},
+                "verified": {"packages": 1, "bytes": 100},
+                "pending": {"packages": 0, "bytes": 0},
+                "states": {
+                    "pending": {"packages": 0, "bytes": 0},
+                    "reused_verified": {"packages": 0, "bytes": 0},
+                    "downloaded_verified": {"packages": 1, "bytes": 100},
+                    "corrupt_removed": {"packages": 0, "bytes": 0},
+                    "failed": {"packages": 0, "bytes": 0},
+                },
+            },
             "cache": {
                 "path": "portusos-build/cache/artix-packages",
                 "audit": {
@@ -829,10 +1068,17 @@ def self_test() -> int:
                         "attempt": 1,
                         "mirror": {"server": "https://mirror.example/artix/$repo/os/$arch", "mirrorlist_line": 1},
                         "requested_count": 1,
+                        "requested_bytes": 100,
+                        "requested_filenames": ["base-1-1-x86_64.pkg.tar.zst"],
                         "verified_count": 1,
+                        "verified_bytes": 100,
+                        "verified_filenames": ["base-1-1-x86_64.pkg.tar.zst"],
                         "pending_count": 0,
+                        "pending_bytes": 0,
+                        "pending_filenames": [],
                         "removed_unverified": [],
                         "result": "pass",
+                        "failure_class": None,
                         "detail": None,
                     }
                 ],
@@ -844,8 +1090,70 @@ def self_test() -> int:
             "failure": None,
         }
         assert validate_repository_closure_report(closure_fixture, "run-1") == "pass"
+        current_failed_fixture = copy.deepcopy(closure_fixture)
+        current_failed_fixture["status"] = "fail"
+        current_failed_fixture["failure"] = "simulated A5 acquisition failure"
+        current_failed_fixture["local_validation"] = None
+        current_failed_fixture["package_progress"][0].update(
+            {
+                "state": "failed",
+                "verified": False,
+                "needs_acquisition": True,
+                "failure_class": "timeout",
+            }
+        )
+        current_failed_fixture["progress_summary"] = {
+            "display": "1 resolved / 0 verified / 1 pending",
+            "resolved": {"packages": 1, "bytes": 100},
+            "verified": {"packages": 0, "bytes": 0},
+            "pending": {"packages": 1, "bytes": 100},
+            "states": {
+                "pending": {"packages": 0, "bytes": 0},
+                "reused_verified": {"packages": 0, "bytes": 0},
+                "downloaded_verified": {"packages": 0, "bytes": 0},
+                "corrupt_removed": {"packages": 0, "bytes": 0},
+                "failed": {"packages": 1, "bytes": 100},
+            },
+        }
+        assert validate_repository_closure_report(current_failed_fixture, "run-1") == "fail"
+        current_failed_fixture["progress_summary"]["pending"]["packages"] = 0
+        try:
+            validate_repository_closure_report(current_failed_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("failed A5 closure evidence must reject a false package-progress summary")
+        invalid_failure_class_fixture = copy.deepcopy(closure_fixture)
+        invalid_failure_class_fixture["cache"]["prefetch_attempts"][0]["failure_class"] = "timeout"
+        try:
+            validate_repository_closure_report(invalid_failure_class_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing mirror attempt must not carry a failure class")
         all_reused_fixture = copy.deepcopy(closure_fixture)
         all_reused_fixture["packages"][0]["cached_before"] = True
+        all_reused_fixture["package_progress"][0].update(
+            {
+                "state": "reused_verified",
+                "batch": None,
+                "attempt": None,
+                "mirror": None,
+            }
+        )
+        all_reused_fixture["progress_summary"] = {
+            "display": "1 resolved / 1 verified / 0 pending",
+            "resolved": {"packages": 1, "bytes": 100},
+            "verified": {"packages": 1, "bytes": 100},
+            "pending": {"packages": 0, "bytes": 0},
+            "states": {
+                "pending": {"packages": 0, "bytes": 0},
+                "reused_verified": {"packages": 1, "bytes": 100},
+                "downloaded_verified": {"packages": 0, "bytes": 0},
+                "corrupt_removed": {"packages": 0, "bytes": 0},
+                "failed": {"packages": 0, "bytes": 0},
+            },
+        }
         all_reused_fixture["cache"]["audit"].update(
             {
                 "reused_count": 1,
@@ -901,6 +1209,8 @@ def self_test() -> int:
         closure_fixture["cache"]["prefetch_attempts"][0]["attempt"] = 1
         historical_failed_fixture = copy.deepcopy(closure_fixture)
         historical_failed_fixture.pop("repository_anchor")
+        historical_failed_fixture.pop("package_progress")
+        historical_failed_fixture.pop("progress_summary")
         historical_failed_fixture["status"] = "fail"
         historical_failed_fixture["failure"] = "historical pre-anchor closure failure"
         historical_failed_fixture["local_validation"] = None

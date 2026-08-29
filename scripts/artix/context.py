@@ -30,6 +30,13 @@ PACKAGE_TARGET_RE = re.compile(r"^[A-Za-z0-9@._+:-]+$")
 FROZEN_REPOSITORIES = ("system", "world", "galaxy")
 PACKAGE_PREFETCH_BATCH_LIMIT_BYTES = 192 * 1024 * 1024
 PACKAGE_PREFETCH_MAX_MIRROR_ATTEMPTS = 4
+PACKAGE_PROGRESS_STATES = (
+    "pending",
+    "reused_verified",
+    "downloaded_verified",
+    "corrupt_removed",
+    "failed",
+)
 
 
 def utc_now() -> str:
@@ -789,14 +796,36 @@ def acquire_batch_with_mirror_failover(
             detail = concise_process_failure(attempt_error) if isinstance(attempt_error, subprocess.CalledProcessError) else str(attempt_error)[:500]
         elif pending_by_filename:
             detail = "attempt completed without producing SHA-256-valid files for every requested identity"
+        failure_class = classify_package_acquisition_failure(
+            attempt_error,
+            set(pending_by_filename),
+            detail,
+        )
+        verified_filenames = sorted(verified_attempt)
+        pending_filenames = sorted(pending_by_filename)
+        requested_filenames = [package["filename"] for package in attempt_packages]
+        requested_bytes = sum(package["size_bytes"] for package in attempt_packages)
+        verified_bytes = sum(
+            package["size_bytes"]
+            for package in attempt_packages
+            if package["filename"] in verified_attempt
+        )
+        pending_bytes = sum(package["size_bytes"] for package in pending_by_filename.values())
         attempt_record = {
             "attempt": attempt_index,
             "mirror": copy.deepcopy(mirror),
             "requested_count": len(attempt_packages),
+            "requested_bytes": requested_bytes,
+            "requested_filenames": requested_filenames,
             "verified_count": len(verified_attempt),
+            "verified_bytes": verified_bytes,
+            "verified_filenames": verified_filenames,
             "pending_count": len(pending_by_filename),
+            "pending_bytes": pending_bytes,
+            "pending_filenames": pending_filenames,
             "removed_unverified": removed_unverified,
             "result": "pass" if attempt_error is None and not pending_by_filename else "fail",
+            "failure_class": failure_class,
             "detail": detail,
         }
         attempts.append(attempt_record)
@@ -952,6 +981,169 @@ def audit_persistent_package_cache(cache: Path, packages: list[dict[str, Any]]) 
     }
 
 
+def initialize_package_progress(packages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Create deterministic per-package progress records for one frozen closure."""
+    progress: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for package in sorted(packages, key=lambda entry: entry["filename"]):
+        filename = package["filename"]
+        if filename in seen:
+            raise RuntimeError(f"duplicate package filename in progress closure: {filename}")
+        seen.add(filename)
+        progress.append(
+            {
+                "repository": package["repository"],
+                "name": package["name"],
+                "version": package["version"],
+                "filename": filename,
+                "size_bytes": package["size_bytes"],
+                "state": "pending",
+                "verified": False,
+                "needs_acquisition": True,
+                "batch": None,
+                "attempt": None,
+                "mirror": None,
+                "failure_class": None,
+            }
+        )
+    return progress
+
+
+def summarize_package_progress(progress: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize package state without losing unresolved-state distinctions."""
+    states = {
+        state: {"packages": 0, "bytes": 0}
+        for state in PACKAGE_PROGRESS_STATES
+    }
+    resolved_packages = 0
+    resolved_bytes = 0
+    verified_packages = 0
+    verified_bytes = 0
+    pending_packages = 0
+    pending_bytes = 0
+    seen: set[str] = set()
+    for record in progress:
+        filename = record.get("filename")
+        state = record.get("state")
+        size_bytes = record.get("size_bytes")
+        if not isinstance(filename, str) or not filename or filename in seen:
+            raise RuntimeError("package progress contains an invalid or duplicate filename")
+        if state not in PACKAGE_PROGRESS_STATES:
+            raise RuntimeError(f"package progress contains invalid state for {filename}: {state!r}")
+        if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes < 0:
+            raise RuntimeError(f"package progress contains invalid size for {filename}")
+        if not isinstance(record.get("verified"), bool) or not isinstance(record.get("needs_acquisition"), bool):
+            raise RuntimeError(f"package progress contains invalid verification flags for {filename}")
+        seen.add(filename)
+        resolved_packages += 1
+        resolved_bytes += size_bytes
+        states[state]["packages"] += 1
+        states[state]["bytes"] += size_bytes
+        if record["verified"]:
+            verified_packages += 1
+            verified_bytes += size_bytes
+        if record["needs_acquisition"]:
+            pending_packages += 1
+            pending_bytes += size_bytes
+    return {
+        "display": f"{resolved_packages} resolved / {verified_packages} verified / {pending_packages} pending",
+        "resolved": {"packages": resolved_packages, "bytes": resolved_bytes},
+        "verified": {"packages": verified_packages, "bytes": verified_bytes},
+        "pending": {"packages": pending_packages, "bytes": pending_bytes},
+        "states": states,
+    }
+
+
+def reconcile_package_progress_from_cache_audit(
+    progress: list[dict[str, Any]],
+    audit: dict[str, Any],
+) -> None:
+    """Apply the A4 cache audit to the current per-package state records."""
+    reused = set(audit["reused_filenames"])
+    pending = set(audit["pending_filenames"])
+    corrupt = set(audit["corrupt_entries_removed"])
+    progress_filenames = {record["filename"] for record in progress}
+    if reused | pending != progress_filenames or reused & pending:
+        raise RuntimeError("cache audit cannot be reconciled with package progress")
+    corrupt_archives = corrupt & progress_filenames
+    for record in progress:
+        filename = record["filename"]
+        record.update(
+            {
+                "batch": None,
+                "attempt": None,
+                "mirror": None,
+                "failure_class": None,
+            }
+        )
+        if filename in reused:
+            record.update(
+                {
+                    "state": "reused_verified",
+                    "verified": True,
+                    "needs_acquisition": False,
+                }
+            )
+        elif filename in corrupt_archives:
+            record.update(
+                {
+                    "state": "corrupt_removed",
+                    "verified": False,
+                    "needs_acquisition": True,
+                }
+            )
+        else:
+            record.update(
+                {
+                    "state": "pending",
+                    "verified": False,
+                    "needs_acquisition": True,
+                }
+            )
+
+
+def record_package_progress_attempt(
+    progress: list[dict[str, Any]],
+    batch_index: int,
+    attempt_record: dict[str, Any],
+) -> None:
+    """Record one mirror attempt against the package state ledger."""
+    by_filename = {record["filename"]: record for record in progress}
+    verified = set(attempt_record["verified_filenames"])
+    pending = set(attempt_record["pending_filenames"])
+    mirror = attempt_record["mirror"].get("server")
+    attempt_number = attempt_record["attempt"]
+    failure_class = attempt_record.get("failure_class")
+    for filename in verified:
+        if filename not in by_filename:
+            raise RuntimeError(f"mirror attempt verified unknown package identity: {filename}")
+        by_filename[filename].update(
+            {
+                "state": "downloaded_verified",
+                "verified": True,
+                "needs_acquisition": False,
+                "batch": batch_index,
+                "attempt": attempt_number,
+                "mirror": mirror,
+                "failure_class": None,
+            }
+        )
+    for filename in pending:
+        if filename not in by_filename:
+            raise RuntimeError(f"mirror attempt left unknown package identity pending: {filename}")
+        by_filename[filename].update(
+            {
+                "state": "failed" if attempt_record.get("result") == "fail" else "pending",
+                "verified": False,
+                "needs_acquisition": True,
+                "batch": batch_index,
+                "attempt": attempt_number,
+                "mirror": mirror,
+                "failure_class": failure_class,
+            }
+        )
+
+
 def verified_cached_filenames(cache: Path, packages: list[dict[str, Any]]) -> set[str]:
     verified: set[str] = set()
     for package in packages:
@@ -1006,6 +1198,43 @@ def render_anchor_pacman_config(original: str, server_template: str) -> str:
     return render_frozen_pacman_config(original, server_template)
 
 
+def classify_package_acquisition_failure(
+    error: BaseException | None,
+    pending_filenames: set[str],
+    detail: str | None,
+) -> str | None:
+    """Return a stable failure class for one package-mirror attempt."""
+    if error is None:
+        return "verification_incomplete" if pending_filenames else None
+    if isinstance(error, (KeyboardInterrupt, SystemExit)):
+        return "interrupted"
+    text = " ".join(
+        part
+        for part in (
+            detail,
+            getattr(error, "stderr", None),
+            getattr(error, "stdout", None),
+            str(error),
+        )
+        if isinstance(part, str) and part
+    ).lower()
+    if "operation too slow" in text or "timed out" in text or "timeout" in text:
+        return "timeout"
+    if "404" in text or "not found" in text:
+        return "http_not_found"
+    if "tls" in text or "ssl" in text or "unexpected eof" in text or "certificate" in text:
+        return "tls"
+    if "could not resolve" in text or "name resolution" in text or "name or service not known" in text:
+        return "dns"
+    if "connection refused" in text or "failed to connect" in text or "could not connect" in text:
+        return "connection"
+    if "sha-256" in text or "checksum" in text or "signature" in text or "corrupt" in text:
+        return "integrity"
+    if isinstance(error, subprocess.CalledProcessError):
+        return "process_failed"
+    return "runtime_error"
+
+
 def concise_process_failure(error: subprocess.CalledProcessError) -> str:
     text = (error.stderr or error.stdout or str(error)).strip()
     if not text:
@@ -1058,6 +1287,8 @@ def freeze_resolved_package_evidence(
 ) -> None:
     """Persist the exact resolved graph before any network acquisition can fail."""
     evidence["packages"] = copy.deepcopy(packages)
+    evidence["package_progress"] = initialize_package_progress(packages)
+    evidence["progress_summary"] = summarize_package_progress(evidence["package_progress"])
     write_repository_closure_evidence(manifest_file, evidence)
 
 
@@ -1138,6 +1369,8 @@ def prepare_repository_closure(
         },
         "repositories": [],
         "packages": [],
+        "package_progress": [],
+        "progress_summary": summarize_package_progress([]),
         "cache": {
             "path": PACKAGE_CACHE_PATH.as_posix(),
             "audit": None,
@@ -1258,6 +1491,8 @@ def prepare_repository_closure(
         freeze_resolved_package_evidence(manifest_file, evidence, packages)
 
         cache_audit = audit_persistent_package_cache(cache_host, packages)
+        reconcile_package_progress_from_cache_audit(evidence["package_progress"], cache_audit)
+        evidence["progress_summary"] = summarize_package_progress(evidence["package_progress"])
         cache_valid_before = set(cache_audit["reused_filenames"])
         reused_count = cache_audit["reused_count"]
         pending_filenames = set(cache_audit["pending_filenames"])
@@ -1315,6 +1550,12 @@ def prepare_repository_closure(
                 evidence["cache"]["prefetch_attempts"].append(
                     {"batch": batch_index, **attempt_record}
                 )
+                record_package_progress_attempt(
+                    evidence["package_progress"],
+                    batch_index,
+                    attempt_record,
+                )
+                evidence["progress_summary"] = summarize_package_progress(evidence["package_progress"])
                 write_repository_closure_evidence(manifest_file, evidence)
 
             acquire_batch_with_mirror_failover(
@@ -1338,6 +1579,7 @@ def prepare_repository_closure(
             evidence["cache"]["downloaded_or_recovered_count"] = len(prefetched_verified)
             evidence["cache"]["verified_count"] = reused_count + len(prefetched_verified)
             evidence["cache"]["prefetch_pending_count"] = len(pending_filenames)
+            evidence["progress_summary"] = summarize_package_progress(evidence["package_progress"])
             if batch_complete:
                 evidence["cache"]["prefetch_completed_batch_count"] = batch_index
             write_repository_closure_evidence(manifest_file, evidence)
@@ -1447,6 +1689,7 @@ def prepare_repository_closure(
         return evidence
     except BaseException as error:
         evidence["failure"] = str(error)
+        evidence["progress_summary"] = summarize_package_progress(evidence.get("package_progress", []))
         write_repository_closure_evidence(manifest_file, evidence)
         raise
     finally:
@@ -2136,6 +2379,9 @@ def self_test() -> int:
         assert all(required_identity_fields.issubset(row) for row in persisted["packages"])
         assert persisted["packages"][0]["size_bytes"] == 1024
         assert persisted["failure"] == "simulated post-resolution acquisition failure"
+        assert persisted["progress_summary"]["display"] == "2 resolved / 0 verified / 2 pending"
+        assert persisted["progress_summary"]["resolved"] == {"packages": 2, "bytes": 3072}
+        assert [record["state"] for record in persisted["package_progress"]] == ["pending", "pending"]
     closure_rows[0]["name"] = "base"
     drifted_rows = copy.deepcopy(closure_rows)
     drifted_rows[1]["version"] = "3.4.3-1"
@@ -2226,6 +2472,33 @@ def self_test() -> int:
         assert not (cache_audit_root / audit_packages[1]["filename"]).exists()
         assert not (cache_audit_root / f"{audit_packages[1]['filename']}.sig").exists()
         assert not (cache_audit_root / f"{audit_packages[2]['filename']}.part").exists()
+        audit_progress = initialize_package_progress(audit_packages)
+        reconcile_package_progress_from_cache_audit(audit_progress, cache_audit)
+        audit_summary = summarize_package_progress(audit_progress)
+        audit_states = {record["name"]: record["state"] for record in audit_progress}
+        assert audit_states == {
+            "reused": "reused_verified",
+            "corrupt": "corrupt_removed",
+            "missing": "pending",
+        }
+        assert audit_summary["display"] == "3 resolved / 1 verified / 2 pending"
+        assert audit_summary["verified"]["bytes"] == len(reused_bytes)
+        assert audit_summary["pending"]["bytes"] == len(corrupt_bytes) + len(missing_bytes)
+        simulated_attempt = {
+            "attempt": 1,
+            "mirror": {"server": "https://mirror.example/artix/$repo/os/$arch", "mirrorlist_line": 1},
+            "verified_filenames": [audit_packages[1]["filename"]],
+            "pending_filenames": [audit_packages[2]["filename"]],
+            "result": "fail",
+            "failure_class": "timeout",
+        }
+        record_package_progress_attempt(audit_progress, 1, simulated_attempt)
+        attempt_states = {record["name"]: record for record in audit_progress}
+        assert attempt_states["corrupt"]["state"] == "downloaded_verified"
+        assert attempt_states["missing"]["state"] == "failed"
+        assert attempt_states["missing"]["failure_class"] == "timeout"
+        attempt_summary = summarize_package_progress(audit_progress)
+        assert attempt_summary["display"] == "3 resolved / 2 verified / 1 pending"
 
         duplicate_audit_packages = [audit_packages[0], copy.deepcopy(audit_packages[0])]
         try:
@@ -2309,6 +2582,18 @@ def self_test() -> int:
     )
     assert [[entry["name"] for entry in batch] for batch in compact_batch_plan] == [["a", "b"], ["c"]]
     assert exact_package_sync_targets(compact_batch_plan[0]) == ["system/a", "system/b"]
+    timeout_error = subprocess.CalledProcessError(
+        1,
+        ["pacman"],
+        stderr="Operation too slow. Less than 1 bytes/sec transferred the last 10 seconds",
+    )
+    assert classify_package_acquisition_failure(timeout_error, {"a"}, concise_process_failure(timeout_error)) == "timeout"
+    tls_error = subprocess.CalledProcessError(1, ["pacman"], stderr="OpenSSL SSL_read: unexpected eof while reading")
+    assert classify_package_acquisition_failure(tls_error, {"a"}, concise_process_failure(tls_error)) == "tls"
+    not_found_error = subprocess.CalledProcessError(1, ["pacman"], stderr="failed retrieving file: 404 Not Found")
+    assert classify_package_acquisition_failure(not_found_error, {"a"}, concise_process_failure(not_found_error)) == "http_not_found"
+    assert classify_package_acquisition_failure(None, {"a"}, None) == "verification_incomplete"
+    assert classify_package_acquisition_failure(None, set(), None) is None
     prefetch_command_fixture = prefetch_pacman_command(
         "/run/prefetch.conf",
         "/run/pacman-db",
@@ -2452,10 +2737,23 @@ def self_test() -> int:
         assert len(failover_attempts) == 2
         assert [call[2] for call in failover_calls] == [["alpha", "beta"], ["beta"]]
         assert failover_attempts[0]["result"] == "fail"
+        assert failover_attempts[0]["failure_class"] == "runtime_error"
+        assert failover_attempts[0]["requested_filenames"] == ["alpha.pkg.tar.zst", "beta.pkg.tar.zst"]
+        assert failover_attempts[0]["verified_filenames"] == ["alpha.pkg.tar.zst"]
+        assert failover_attempts[0]["pending_filenames"] == ["beta.pkg.tar.zst"]
+        assert failover_attempts[0]["requested_bytes"] == len(alpha_bytes) + len(beta_bytes)
+        assert failover_attempts[0]["verified_bytes"] == len(alpha_bytes)
+        assert failover_attempts[0]["pending_bytes"] == len(beta_bytes)
         assert "beta.pkg.tar.zst" in failover_attempts[0]["removed_unverified"]
         assert "beta.pkg.tar.zst.part" in failover_attempts[0]["removed_unverified"]
         assert failover_attempts[1]["result"] == "pass"
         assert len(failover_progress) == 2
+        failover_package_progress = initialize_package_progress(acquire_packages)
+        for attempt_record in failover_attempts:
+            record_package_progress_attempt(failover_package_progress, 1, attempt_record)
+        failover_summary = summarize_package_progress(failover_package_progress)
+        assert failover_summary["display"] == "2 resolved / 2 verified / 0 pending"
+        assert all(record["state"] == "downloaded_verified" for record in failover_package_progress)
         verify_cached_package_files(batch_cache, acquire_packages)
 
         for path in tuple(batch_cache.iterdir()):
