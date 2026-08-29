@@ -1,0 +1,5 @@
+policy_version = 1
+id = "external-data-delivery"
+label = "External Data and Delivery"
+broad_default = true
+grants = []

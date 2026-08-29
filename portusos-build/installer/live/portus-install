@@ -1,0 +1,13 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+set -eu
+
+settings=/usr/share/calamares/settings.conf
+input_qml=/usr/share/portus-installer/portus-storage-input.qml
+
+if [ ! -r "$settings" ] || [ ! -r "$input_qml" ]; then
+    echo "PortusOS installer files are incomplete." >&2
+    exit 1
+fi
+
+exec /usr/bin/pkexec /usr/bin/calamares

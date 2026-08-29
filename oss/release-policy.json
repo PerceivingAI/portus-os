@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "authority": "docs/RELEASE.md",
+  "first_public_release": {
+    "version": "0.1.0",
+    "maturity": "technical-preview",
+    "public_label": "PortusOS 0.1.0 Technical Preview",
+    "scope": "x86_64 VMware-first technical preview"
+  },
+  "first_party_license": {
+    "spdx": "Apache-2.0",
+    "license_file": "LICENSE"
+  },
+  "repository": {
+    "host": "github",
+    "external_code_contributions": false,
+    "issues": {
+      "enabled": true,
+      "accepted": [
+        "reproducible-bug",
+        "documentation-defect"
+      ],
+      "general_support_channel": false,
+      "security_reports_allowed": false
+    },
+    "private_vulnerability_reporting": {
+      "mechanism": "github-private-vulnerability-reporting",
+      "activation_status": "pending-public-repository",
+      "notifications_reviewed": false
+    }
+  },
+  "signing": {
+    "mechanism": "openssh-sshsig-ed25519",
+    "signed_object": "SHA256SUMS",
+    "namespace": "portusos-release",
+    "signer_identity": "portusos-release",
+    "private_key_custody": "external-offline-owner-controlled-encrypted",
+    "public_key_ref": "release/keys/portusos-release.allowed_signers",
+    "public_key_status": "pending-key-ceremony"
+  },
+  "support": {
+    "level": "best-effort",
+    "supported_release": "current-public-final-only",
+    "end_condition": "superseded-or-withdrawn",
+    "release_candidate_support": false,
+    "lts": false,
+    "sla": false,
+    "guaranteed_update_cadence": false
+  },
+  "unresolved_owner_decisions": []
+}

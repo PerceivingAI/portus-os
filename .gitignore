@@ -1,0 +1,37 @@
+/target/
+**/*.rs.bk
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+__pycache__/
+*.py[cod]
+
+# PortusOS generated build/release evidence and native scratch.
+# This covers native-runs/, harness-homes/, Artix/bootstrap caches, build ledgers,
+# L2 inspection captures/package archives, generated ISO trees, and cleanup evidence.
+/portusos-build/work/
+/portusos-build/cache/
+/portusos-build/out/
+/artifacts/oss/
+
+# Local credentials and credential-adjacent files
+.env
+.env.*
+!.env.example
+.dev.vars
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local state, logs, and generated distribution artifacts
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.iso
+
+# Editor-local state
+.idea/
+.vscode/

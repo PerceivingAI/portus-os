@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible PortusOS bug or documentation defect
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for reproducible bugs or documentation defects only. Do not disclose vulnerabilities, credentials, exploit details, or sensitive logs in a public issue. Security reports belong in GitHub Private Vulnerability Reporting once the public repository enables it.
+  - type: checkboxes
+    id: security
+    attributes:
+      label: Security check
+      options:
+        - label: This report does not contain a security vulnerability, reusable credential, exploit detail, private key, or other sensitive security material.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: PortusOS release or candidate
+      description: Include the version/candidate ID and ISO SHA-256 when applicable.
+      placeholder: PortusOS 0.1.0 / candidate ID / SHA-256
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe what happened and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest reliable reproduction you can.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the relevant VMware/host/install/runtime details without private information or secrets.
+    validations:
+      required: true

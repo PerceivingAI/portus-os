@@ -1,0 +1,15 @@
+[package]
+name = "portus-task"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+portus-protocol = { path = "../portus-protocol" }
+portus-state = { path = "../portus-state" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

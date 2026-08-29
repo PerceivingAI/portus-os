@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portusos.local/oss/provenance.schema.json",
+  "title": "PortusOS release provenance v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidate_id", "source_revision", "source_tag", "build_metadata_sha256", "package_source_manifest_sha256", "package_lock_sha256", "first_party_license", "license_file_sha256", "release_policy_sha256", "sbom_sha256", "validation_report_sha256", "iso_sha256", "builder_environment_ref", "build_instructions_revision", "created_at", "complete", "incomplete_reasons"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "source_tag": {"type": ["string", "null"]},
+    "build_metadata_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "package_source_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "package_lock_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "first_party_license": {"const": "Apache-2.0"},
+    "license_file_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "release_policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sbom_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "validation_report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "iso_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "builder_environment_ref": {"type": "string", "minLength": 1},
+    "build_instructions_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "created_at": {"type": "string", "minLength": 1},
+    "complete": {"type": "boolean"},
+    "incomplete_reasons": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+  }
+}

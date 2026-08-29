@@ -1,0 +1,5 @@
+policy_version = 1
+id = "files-workspaces"
+label = "Files and Workspaces"
+broad_default = true
+grants = []

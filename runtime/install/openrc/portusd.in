@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+# P16-LINUX-RESOLUTION-REQUIRED
+# This package-owned template is not an installable /etc/init.d script yet.
+# Track L must resolve command_user, dependencies, runlevel enablement, and bounded
+# supervise-daemon/health parameters against the real Artix environment.
+
+name="PortusOS runtime"
+description="PortusOS coordination and state runtime"
+command="/usr/bin/portusd"
+required_dirs="/run/portus /var/lib/portus/state /var/log/portus/audit"

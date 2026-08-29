@@ -1,0 +1,339 @@
+install_version = 1
+
+[[binaries]]
+name = "portus-os"
+target = "/usr/bin/portus-os"
+
+[[binaries]]
+name = "portusd"
+target = "/usr/bin/portusd"
+
+[[binaries]]
+name = "portus-privd"
+target = "/usr/bin/portus-privd"
+
+[[binaries]]
+name = "portus-apid"
+target = "/usr/bin/portus-apid"
+
+[[binaries]]
+name = "portus-api"
+target = "/usr/bin/portus-api"
+
+[[binaries]]
+name = "portus-auth"
+target = "/usr/bin/portus-auth"
+
+[[binaries]]
+name = "portus-bootstrap"
+target = "/usr/bin/portus-bootstrap"
+
+[[binaries]]
+name = "portus-master"
+target = "/usr/bin/portus-master"
+
+[[files]]
+source = "runtime/integrations/manifests/protected-api.toml"
+target = "/etc/portus/capabilities/protected-api.toml"
+policy = "administrator-config"
+mode = "0644"
+
+[[files]]
+source = "runtime/integrations/manifests/portus-browser.toml"
+target = "/etc/portus/capabilities/portus-browser.toml"
+policy = "administrator-config"
+mode = "0644"
+
+[[files]]
+source = "runtime/integrations/protected-api/providers/openai.toml"
+target = "/etc/portus/protected-api/providers.d/openai.toml"
+policy = "administrator-config"
+mode = "0644"
+
+[[files]]
+source = "runtime/integrations/portus-browser/integration.toml"
+target = "/usr/share/portus/integrations/portus-browser/integration.toml"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/policy/policy.toml"
+target = "/etc/portus/policy/policy.toml"
+policy = "administrator-config"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/skills/protected-api/SKILL.md"
+target = "/etc/codex/skills/protected-api/SKILL.md"
+policy = "administrator-config"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/policy/actions.toml"
+target = "/usr/share/portus/policy/actions.toml"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/policy/bundles/files-workspaces.toml"
+target = "/usr/share/portus/policy/bundles/files-workspaces.toml"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/policy/bundles/applications-desktop.toml"
+target = "/usr/share/portus/policy/bundles/applications-desktop.toml"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/policy/bundles/development.toml"
+target = "/usr/share/portus/policy/bundles/development.toml"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/policy/bundles/network-internet.toml"
+target = "/usr/share/portus/policy/bundles/network-internet.toml"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/policy/bundles/system-administration.toml"
+target = "/usr/share/portus/policy/bundles/system-administration.toml"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/policy/bundles/devices-hardware.toml"
+target = "/usr/share/portus/policy/bundles/devices-hardware.toml"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/policy/bundles/remote-access.toml"
+target = "/usr/share/portus/policy/bundles/remote-access.toml"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/policy/bundles/external-data-delivery.toml"
+target = "/usr/share/portus/policy/bundles/external-data-delivery.toml"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/openrc/portusd.in"
+target = "/usr/share/portus/openrc/templates/portusd.in"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/openrc/portus-privd.in"
+target = "/usr/share/portus/openrc/templates/portus-privd.in"
+policy = "package-owned"
+mode = "0644"
+
+[[files]]
+source = "runtime/install/openrc/portus-apid.in"
+target = "/usr/share/portus/openrc/templates/portus-apid.in"
+policy = "package-owned"
+mode = "0644"
+
+[[directories]]
+path = "/etc/portus/capabilities"
+owner = "root"
+group = "root"
+mode = "0755"
+lifetime = "config"
+resolution = "locked"
+
+[[directories]]
+path = "/etc/codex/skills/protected-api"
+owner = "root"
+group = "root"
+mode = "0755"
+lifetime = "config"
+resolution = "locked"
+
+[[directories]]
+path = "/etc/portus/policy"
+owner = "root"
+group = "root"
+mode = "0755"
+lifetime = "config"
+resolution = "locked"
+
+[[directories]]
+path = "/etc/portus/policy/subjects.d"
+owner = "root"
+group = "root"
+mode = "0755"
+lifetime = "persistent-config"
+resolution = "locked"
+
+[[directories]]
+path = "/etc/portus/protected-api/providers.d"
+owner = "root"
+group = "root"
+mode = "0755"
+lifetime = "config"
+resolution = "locked"
+
+[[directories]]
+path = "/usr/share/portus/policy/bundles"
+owner = "root"
+group = "root"
+mode = "0755"
+lifetime = "package-owned"
+resolution = "locked"
+
+[[directories]]
+path = "/usr/share/portus/integrations/portus-browser"
+owner = "root"
+group = "root"
+mode = "0755"
+lifetime = "package-owned"
+resolution = "locked"
+
+[[directories]]
+path = "/usr/share/portus/openrc/templates"
+owner = "root"
+group = "root"
+mode = "0755"
+lifetime = "package-owned"
+resolution = "locked"
+
+[[directories]]
+path = "/var/lib/portus"
+owner = "root"
+group = "root"
+mode = "0755"
+lifetime = "persistent-state"
+resolution = "locked"
+
+[[directories]]
+path = "/var/lib/portus/state"
+lifetime = "persistent-state"
+resolution = "linux-verified"
+unresolved_reason = "portusd service identity and state-directory owner remain a Track L decision"
+
+[[directories]]
+path = "/var/lib/portus/protected-api"
+owner = "portus-api"
+group = "portus-api"
+mode = "0700"
+lifetime = "persistent-state"
+resolution = "locked"
+
+[[directories]]
+path = "/var/log/portus"
+owner = "root"
+group = "root"
+mode = "0755"
+lifetime = "persistent-log"
+resolution = "locked"
+
+[[directories]]
+path = "/var/log/portus/audit"
+lifetime = "persistent-log"
+resolution = "linux-verified"
+unresolved_reason = "portusd, root portus-privd, and portus-api must share bounded audit placement without inventing an unverified group/ACL"
+
+[[directories]]
+path = "/run/portus"
+lifetime = "runtime"
+resolution = "linux-verified"
+unresolved_reason = "portusd socket owner/group and parent runtime-directory contract remain Track L verification"
+
+[[directories]]
+path = "/run/portus/priv"
+owner = "root"
+group = "portus-priv-users"
+mode = "0750"
+lifetime = "runtime"
+resolution = "locked"
+
+[[directories]]
+path = "/run/portus/protected-api"
+owner = "portus-api"
+group = "portus-api-users"
+mode = "02750"
+lifetime = "runtime"
+resolution = "locked"
+
+[[identities]]
+id = "portus-privd"
+kind = "service"
+user = "root"
+group = "root"
+resolution = "locked"
+
+[[identities]]
+id = "portus-apid"
+kind = "service"
+user = "portus-api"
+group = "portus-api"
+resolution = "locked"
+
+[[identities]]
+id = "portus-api-users"
+kind = "transport-group"
+group = "portus-api-users"
+resolution = "locked"
+
+[[identities]]
+id = "portus-priv-users"
+kind = "transport-group"
+group = "portus-priv-users"
+resolution = "locked"
+
+[[identities]]
+id = "portusd"
+kind = "service"
+resolution = "linux-verified"
+unresolved_reason = "portusd must be non-root in normal operation, but exact service user/socket group is not yet Linux-verified"
+
+[[services]]
+name = "portusd"
+command = "/usr/bin/portusd"
+template_source = "runtime/install/openrc/portusd.in"
+template_target = "/usr/share/portus/openrc/templates/portusd.in"
+lifecycle_owner = "openrc"
+resolution = "linux-verified"
+unresolved_reason = "command_user, dependency graph, runlevel enablement, supervision/respawn and health parameters require Artix verification"
+
+[[services]]
+name = "portus-privd"
+command = "/usr/bin/portus-privd"
+command_user = "root:root"
+template_source = "runtime/install/openrc/portus-privd.in"
+template_target = "/usr/share/portus/openrc/templates/portus-privd.in"
+lifecycle_owner = "openrc"
+resolution = "linux-verified"
+unresolved_reason = "dependency graph, runlevel enablement, supervision/respawn and health parameters require Artix verification"
+
+[[services]]
+name = "portus-apid"
+command = "/usr/bin/portus-apid"
+command_user = "portus-api:portus-api"
+template_source = "runtime/install/openrc/portus-apid.in"
+template_target = "/usr/share/portus/openrc/templates/portus-apid.in"
+lifecycle_owner = "openrc"
+resolution = "linux-verified"
+unresolved_reason = "dependency graph, runlevel enablement, supervision/respawn and health parameters require Artix verification"
+
+[[external_requirements]]
+id = "portus-browser"
+required_for_first_iso = true
+items = ["portus-browser", "portus-broker", "portus-native-host", "extension", "portus-browser-skill"]
+resolution = "linux-verified"
+unresolved_reason = "P15 requires a clean immutable source freeze and installed Chromium/native-messaging proof"
+
+[uninstall]
+preserve_prefixes = [
+  "/var/lib/portus",
+  "/var/log/portus",
+  "/etc/portus/policy/subjects.d",
+  "/workspace"
+]

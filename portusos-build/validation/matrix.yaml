@@ -1,0 +1,43 @@
+schema_version: 1
+authority: docs/VALIDATION.md
+
+# This file owns harness orchestration metadata only. Assertions/evidence meaning remains in docs/VALIDATION.md.
+tests:
+  - { id: ISO-01, class: automated, environment: build-host, blocking: true }
+  - { id: ISO-02, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-03, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-04, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-05, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-06, class: automated, environment: reference, blocking: true }
+  - { id: ISO-07, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-08, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-09, class: automated, environment: reference, blocking: true }
+  - { id: ISO-10, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-11, class: automated, environment: reference, blocking: true }
+  - { id: ISO-12, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-13, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-14, class: automated, environment: reference, blocking: true }
+  - { id: ISO-15, class: automated, environment: reference, blocking: true }
+  - { id: ISO-16, class: automated, environment: reference, blocking: true }
+  - { id: ISO-17, class: automated, environment: reference, blocking: true }
+  - { id: ISO-18, class: automated, environment: reference, blocking: true }
+  - { id: ISO-19, class: automated, environment: reference, blocking: true }
+  - { id: ISO-20, class: automated, environment: reference, blocking: true }
+  - { id: ISO-21, class: automated, environment: reference, blocking: true }
+  - { id: ISO-22, class: automated, environment: reference, blocking: true }
+  - { id: ISO-23, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-24, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-25, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-26, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-27, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-28, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-29, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-30, class: automated, environment: reference, blocking: true }
+  - { id: ISO-31, class: automated, environment: reference, blocking: true }
+  - { id: ISO-32, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-33, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-34, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-35, class: assisted, environment: reference, blocking: true }
+  - { id: ISO-36, class: assisted, environment: recovery, blocking: true }
+  - { id: ISO-37, class: assisted, environment: minimum, blocking: true }
+  - { id: ISO-38, class: assisted, environment: reference, blocking: true }

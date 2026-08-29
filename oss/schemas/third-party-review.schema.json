@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portusos.local/oss/third-party-review.schema.json",
+  "title": "PortusOS candidate third-party redistribution review v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidate_id", "reviewed_at", "entries"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "reviewed_at": {"type": "string", "minLength": 1},
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "distributed", "exact_identity", "licenses", "redistribution_status", "notices", "evidence_refs"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "distributed": {"type": "boolean"},
+          "exact_identity": {"type": "string", "minLength": 1},
+          "licenses": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "redistribution_status": {"enum": ["approved", "not-distributed", "pending", "rejected"]},
+          "notices": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "evidence_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+        }
+      }
+    }
+  }
+}

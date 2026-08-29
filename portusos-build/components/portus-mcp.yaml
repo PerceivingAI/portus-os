@@ -1,0 +1,37 @@
+schema_version: 1
+id: portus-mcp
+source_class: portus-owned
+authority: TUNNEL_INSTRUCTIONS.md
+
+source:
+  repository: https://github.com/PerceivingAI/portus-mcp.git
+  revision:
+    resolution: locked
+    value: a963c56a72ca106cbac3b848256bb393fb9dc2da
+    required_gate: L2
+  source_tree_required_clean: true
+
+runtime:
+  install_root: /opt/portus/portus-mcp
+  local_mcp_url: http://127.0.0.1:8789/mcp
+  start_command: npm run start:tunnel
+  node_minimum: "20.9.0"
+  dependency_install_command: npm ci
+  runtime_dev_dependencies_required: true
+  policy_path: /etc/portus/portus-mcp/policy.json
+  policy_source: portusos-build/rootfs/overlay/etc/portus/portus-mcp/policy.json
+  local_launcher: /usr/local/bin/portus-mcp-local
+  local_launcher_source: portusos-build/rootfs/overlay/usr/local/bin/portus-mcp-local
+  tunnel_launcher: /usr/local/bin/portus-tunnel-setup
+  tunnel_launcher_source: portusos-build/rootfs/overlay/usr/local/bin/portus-tunnel-setup
+  default_project_root_template: /workspace/{user}/master
+  subagents_enabled: false
+  bundled_required: true
+  setup_required: false
+  lifecycle_owner: master-session
+
+packaging:
+  resolution: linux-verified
+  evidence_ref: null
+  unresolved_reason: exact immutable source packaging, npm dependency installation and Artix live-session launch must be verified in the first interactive ISO
+  required_gate: L2/L5

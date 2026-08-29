@@ -1,0 +1,32 @@
+schema_version: 1
+
+target:
+  architecture: x86_64
+  firmware: uefi
+  secure_boot: false
+
+contracts:
+  packages: portusos-build/packages/packages.yaml
+  codex: portusos-build/components/codex.yaml
+  portus_browser: portusos-build/components/portus-browser.yaml
+  portus_mcp: portusos-build/components/portus-mcp.yaml
+  tunnel_client: portusos-build/components/tunnel-client.yaml
+  portus_install: runtime/install/install.toml
+  storage: portusos-build/system/storage.yaml
+  services: portusos-build/system/base-services.yaml
+  identities: portusos-build/system/identities.yaml
+  vm_profiles: portusos-build/system/vm-profiles.yaml
+  calamares: portusos-build/installer/calamares.yaml
+  iso: portusos-build/iso/profile.yaml
+  validation: portusos-build/validation/matrix.yaml
+
+schemas:
+  build_config: portusos-build/schemas/build-config.schema.json
+  environment_preflight: portusos-build/schemas/environment-preflight.schema.json
+  package_source: portusos-build/schemas/package-source.schema.json
+  package_lock: portusos-build/schemas/package-lock.schema.json
+  build_metadata: portusos-build/schemas/build-metadata.schema.json
+  build_run: portusos-build/schemas/build-run.schema.json
+  release_metadata: portusos-build/schemas/release-metadata.schema.json
+  validation_result: portusos-build/schemas/validation-result.schema.json
+  validation_report: portusos-build/schemas/validation-report.schema.json

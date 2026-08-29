@@ -1,0 +1,25 @@
+integration_version = 1
+provider_type = "portus-browser"
+software_version = "0.1.0"
+protocol_version = "2"
+source_repository = "https://github.com/PerceivingAI/portus-browser.git"
+source_pin_state = "pinned"
+source_revision = "c263c3997b4e6f2f7df5922e062a9e949e22f755"
+cli_contract_version = 1
+capability_id = "browser.control"
+capability_contract_version = 1
+resource_type = "browser-session"
+cli_executable = "/usr/bin/portus-browser"
+broker_executable = "/usr/bin/portus-broker"
+native_host_executable = "/usr/bin/portus-native-host"
+skill_source = "skills/portus-browser"
+
+[lifecycle]
+owner = "provider-owned"
+broker_start = "native-host-on-demand"
+
+[reference_browser]
+family = "chromium"
+xdg_native_messaging_relative_dir = "chromium/NativeMessagingHosts"
+native_host_name = "com.portus.browser"
+extension_id_source = "installed-extension"

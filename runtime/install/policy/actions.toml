@@ -1,0 +1,38 @@
+policy_version = 1
+
+[[actions]]
+id = "service.restart"
+label = "Restart approved OpenRC service"
+class = "privileged_typed_operation"
+resource_kind = "openrc_service"
+resource_required = true
+root_equivalent = false
+
+[[actions]]
+id = "protected-api.request"
+label = "Use protected API operation"
+class = "portus_provider_policy"
+resource_kind = "protected_api_operation"
+resource_required = true
+root_equivalent = false
+
+[[actions]]
+id = "visual.capture"
+label = "Capture graphical screenshot"
+class = "user_native"
+resource_required = false
+root_equivalent = false
+
+[[actions]]
+id = "visual.pointer"
+label = "Use graphical pointer fallback"
+class = "user_native"
+resource_required = false
+root_equivalent = false
+
+[[actions]]
+id = "visual.keyboard"
+label = "Use graphical keyboard fallback"
+class = "user_native"
+resource_required = false
+root_equivalent = false

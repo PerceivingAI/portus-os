@@ -1,0 +1,41 @@
+schema_version: 1
+id: tunnel-client
+source_class: approved-external
+authority: TUNNEL_INSTRUCTIONS.md
+
+source:
+  repository: https://github.com/openai/tunnel-client.git
+  release:
+    resolution: locked
+    version: "0.0.13"
+    required_gate: L2
+  linux_amd64_asset: tunnel-client-v0.0.13-linux-amd64.zip
+  linux_amd64_sha256:
+    resolution: locked
+    value: e71f37b424126513173d5e3590687c0b5ccf6e8ef3fba900104d1f8c60dad906
+    required_gate: L2
+  licenses_asset: tunnel-client-v0.0.13-linux-amd64-licenses.txt
+  spdx_asset: tunnel-client-v0.0.13-linux-amd64.spdx.json
+  provenance_asset: tunnel-client-v0.0.13-provenance.sigstore.json
+
+runtime:
+  executable: /usr/local/bin/tunnel-client
+  default_profile: portus-local
+  portus_mcp_url: http://127.0.0.1:8789/mcp
+  control_plane_base_url: https://api.openai.com
+  outbound_only: true
+  bundled_required: true
+  setup_required: false
+  lifecycle_owner: master-session
+
+codex_plugin:
+  bundled_in_binary: true
+  install_command: tunnel-client codex plugin install
+  setup_required: false
+
+compatibility:
+  artix:
+    resolution: linux-verified
+    evidence_ref: null
+    unresolved_reason: the pinned Linux x86_64 tunnel-client release, Codex plugin install and Portus MCP profile/run path must be exercised in the Artix live environment
+    required_gate: L2/L3

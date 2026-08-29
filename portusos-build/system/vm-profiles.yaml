@@ -1,0 +1,20 @@
+schema_version: 1
+resolution: locked
+
+profiles:
+  minimum:
+    vcpu: 2
+    memory_mib: 4096
+    disk_gib: 40
+    firmware: uefi
+    secure_boot: false
+    network: nat
+    three_d_acceleration_required: false
+  reference:
+    vcpu: 4
+    memory_mib: 8192
+    disk_gib: 80
+    firmware: uefi
+    secure_boot: false
+    network: nat
+    three_d_acceleration_required: false

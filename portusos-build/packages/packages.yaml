@@ -1,0 +1,289 @@
+schema_version: 1
+
+source_policies:
+  official-artix:
+    verification: artix-signature-keyring
+    installation_owner: pacman-artools
+    update_owner: pacman
+    failure_behavior: fail-closed
+    public_redistribution: pending-review
+  portus-owned:
+    verification: source-revision-local-package-hash
+    installation_owner: portusos-build
+    update_owner: portusos-release
+    failure_behavior: fail-build
+    public_redistribution: pending-review
+  approved-external:
+    verification: component-contract
+    installation_owner: component-contract
+    update_owner: explicit-component-workflow
+    failure_behavior: fail-build-or-degrade-per-contract
+    public_redistribution: pending-review
+  validation-only:
+    verification: selected-source-contract
+    installation_owner: validation-profile
+    update_owner: validation-profile
+    failure_behavior: fail-validation-profile
+    public_redistribution: pending-review
+  hardware-selected:
+    verification: selected-source-contract
+    installation_owner: hardware-profile
+    update_owner: source-owner
+    failure_behavior: fail-selected-profile
+    public_redistribution: pending-review
+
+packages:
+  - id: artix-base
+    role: base-system
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [base, artix-live-base, artix-live-openrc, artix-grub-live, iso-initcpio, linux-firmware, intel-ucode, amd-ucode]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: linux-lts
+    role: normal-kernel
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [linux-lts]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: linux
+    role: alternate-kernel
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [linux]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: boot-storage-tooling
+    role: grub-luks-lvm-filesystems-initramfs
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [grub, efibootmgr, cryptsetup, lvm2, e2fsprogs, dosfstools, mkinitcpio, mtools]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: dbus
+    role: system-dbus
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [dbus, dbus-openrc]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: elogind
+    role: login-session
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [elogind, elogind-openrc]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: networkmanager
+    role: networking
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [networkmanager, networkmanager-openrc]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: openssh
+    role: ssh
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [openssh, openssh-openrc]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: nftables
+    role: firewall
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [nftables, nftables-openrc]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: chrony
+    role: time-sync
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [chrony, chrony-openrc]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: syslog
+    role: machine-logging
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [syslog-ng, syslog-ng-openrc]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: x11-i3-session
+    role: graphical-session
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: graphical
+    package:
+      resolution: locked
+      names: [xorg-server, xorg-xinit, xorg-xprop, i3-wm, alacritty, mesa, maim, xdotool, polkit]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: tmux
+    role: master-terminal-continuity
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [tmux]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: git
+    role: source-control
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [git]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: curl-ca
+    role: verified-https-download
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [curl, ca-certificates]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: bubblewrap
+    role: delegated-agent-sandbox
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [bubblewrap]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: chromium
+    role: codex-chatgpt-auth-default-browser-and-portusbrowser-reference
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [ungoogled-chromium, xdg-utils]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: calamares
+    role: installer-framework
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: installer
+    package:
+      resolution: locked
+      names: [calamares]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: artools
+    role: iso-build-framework
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: build-host
+    package:
+      resolution: locked
+      names: [artools-base, artools-iso, artools-pkg, libisoburn, squashfs-tools]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: nodejs-npm
+    role: portus-mcp-javascript-runtime
+    source_class: official-artix
+    required_for_first_iso: true
+    profile: base
+    package:
+      resolution: locked
+      names: [nodejs, npm]
+      unresolved_reason: null
+      required_gate: L2
+
+  - id: portus-runtime
+    role: portus-control-plane
+    source_class: portus-owned
+    required_for_first_iso: true
+    profile: base
+    install_contract: runtime/install/install.toml
+
+  - id: portus-browser
+    role: structured-browser-control
+    source_class: portus-owned
+    required_for_first_iso: true
+    profile: validation-browser
+    component_contract: portusos-build/components/portus-browser.yaml
+
+  - id: portus-mcp
+    role: optional-remote-agent-mcp-bridge
+    source_class: portus-owned
+    required_for_first_iso: true
+    profile: base
+    component_contract: portusos-build/components/portus-mcp.yaml
+
+  - id: tunnel-client
+    role: optional-openai-secure-mcp-tunnel
+    source_class: approved-external
+    required_for_first_iso: true
+    profile: base
+    component_contract: portusos-build/components/tunnel-client.yaml
+
+  - id: codex
+    role: master-agent-runtime
+    source_class: approved-external
+    required_for_first_iso: true
+    profile: base
+    component_contract: portusos-build/components/codex.yaml

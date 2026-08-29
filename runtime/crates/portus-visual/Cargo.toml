@@ -1,0 +1,17 @@
+[package]
+name = "portus-visual"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+portus-artifact = { path = "../portus-artifact" }
+portus-audit = { path = "../portus-audit" }
+portus-policy = { path = "../portus-policy" }
+portus-protocol = { path = "../portus-protocol" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

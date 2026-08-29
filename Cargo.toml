@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+members = [
+    "runtime/crates/portus-protocol",
+    "runtime/crates/portus-client",
+    "runtime/crates/portus-state",
+    "runtime/crates/portus-provider",
+    "runtime/crates/portus-index",
+    "runtime/crates/portus-task",
+    "runtime/crates/portus-master",
+    "runtime/crates/portus-visual",
+    "runtime/crates/portus-browser-integration",
+    "runtime/crates/portus-install",
+    "runtime/crates/portus-build-contract",
+    "runtime/crates/portus-build",
+    "runtime/crates/portus-audit",
+    "runtime/crates/portus-policy",
+    "runtime/crates/portus-health",
+    "runtime/crates/portus-artifact",
+    "runtime/crates/portus-protected-api",
+    "runtime/crates/portusd",
+    "runtime/crates/portus-os",
+    "runtime/crates/portus-privd",
+    "runtime/crates/portus-apid",
+    "runtime/crates/portus-api",
+    "runtime/crates/portus-auth",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = { package = "yaml_serde", version = "0.10" }
+uuid = { version = "1", features = ["serde", "v7"] }
+rusqlite = { version = "0.40", features = ["backup", "bundled"] }
+ctrlc = { version = "3.5", features = ["termination"] }
+clap = { version = "4.5", features = ["derive"] }
+toml = "0.9"
+url = "2.5"
+zeroize = "1.8"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rpassword = "7.4"
+sha2 = "0.10"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+correctness = "deny"
+suspicious = "deny"

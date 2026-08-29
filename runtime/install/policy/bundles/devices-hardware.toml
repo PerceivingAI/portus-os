@@ -1,0 +1,5 @@
+policy_version = 1
+id = "devices-hardware"
+label = "Devices and Hardware"
+broad_default = true
+grants = []

@@ -1,0 +1,19 @@
+policy_version = 1
+id = "applications-desktop"
+label = "Applications and Desktop"
+broad_default = true
+
+[[grants]]
+action = "visual.capture"
+effect = "allow"
+resources = []
+
+[[grants]]
+action = "visual.pointer"
+effect = "allow"
+resources = []
+
+[[grants]]
+action = "visual.keyboard"
+effect = "allow"
+resources = []

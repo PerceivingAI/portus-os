@@ -1,0 +1,28 @@
+[package]
+name = "portusd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+ctrlc = { workspace = true }
+portus-audit = { path = "../portus-audit" }
+portus-artifact = { path = "../portus-artifact" }
+portus-client = { path = "../portus-client" }
+portus-health = { path = "../portus-health" }
+portus-index = { path = "../portus-index" }
+portus-policy = { path = "../portus-policy" }
+portus-protocol = { path = "../portus-protocol" }
+portus-provider = { path = "../portus-provider" }
+portus-state = { path = "../portus-state" }
+portus-task = { path = "../portus-task" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.31", features = ["socket"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,43 @@
+schema_version: 1
+id: codex
+source_class: approved-external
+authority: CODEX_UPDATES.md
+
+distribution:
+  kind: official-standalone-package
+  executable: /usr/local/bin/codex
+  package_root: /usr/lib/codex/standalone/releases/0.150.1-x86_64-unknown-linux-musl
+  visible_symlink_target: ../../lib/codex/standalone/releases/0.150.1-x86_64-unknown-linux-musl/bin/codex
+  release_tag: rust-v0.150.1
+  target: x86_64-unknown-linux-musl
+  package_asset: codex-package-x86_64-unknown-linux-musl.tar.gz
+  checksum_asset: codex-package_SHA256SUMS
+  auto_update_on_startup: false
+
+pin:
+  resolution: locked
+  version: "0.150.1"
+  evidence_baseline_version: "0.149.0"
+  required_gate: L3
+
+verification:
+  package_sha256:
+    resolution: locked
+    value: 00aba704f029f6dc0d948be407a756e0c97cc840132fd691353b2c6b0a505b17
+    required_gate: L3
+  checksum_manifest_sha256:
+    resolution: locked
+    value: 5580070dd9e1c06a603421111f32aa107fd77de2ab306986c11a26166b78e6fa
+    required_gate: L3
+  installed_version:
+    resolution: linux-verified
+    value: null
+    unresolved_reason: codex --version must report codex-cli 0.150.1 from the staged first-ISO target, not merely from an extracted build-host smoke tree
+    required_gate: L3
+
+compatibility:
+  artix:
+    resolution: linux-verified
+    evidence_ref: null
+    unresolved_reason: full CODEX_UPDATES.md Artix/OpenRC runtime compatibility matrix, including ChatGPT browser auth, TUI/tmux, sandboxing, policy, persistence, skills and doctor, requires the staged target/live VM
+    required_gate: L3

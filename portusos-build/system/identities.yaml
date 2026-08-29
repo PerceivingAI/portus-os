@@ -1,0 +1,25 @@
+schema_version: 1
+
+root_administration:
+  uid: 0
+  ultimate_authority: true
+  independent_from_master: true
+  credential_source: installer-owner-input
+
+master_user:
+  creation_owner: installer
+  username_source: installer-owner-input
+  uid_resolution: generated
+  non_root_required: true
+  private_home_required: true
+  workspace_root_template: /workspace/{user}
+  permission_bundle_source: runtime/install/policy/bundles
+
+portus_service_identities:
+  authority: runtime/install/install.toml
+
+non_root_administrator_account:
+  required: false
+  resolution: linux-verified
+  unresolved_reason: a convenient non-root administrator account may be provided but is not required to replace the independent UID-0 recovery boundary
+  required_gate: L6

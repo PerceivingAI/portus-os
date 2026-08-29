@@ -1,0 +1,22 @@
+schema_version: 1
+
+generated:
+  work: portusos-build/work
+  cache: portusos-build/cache
+  out: portusos-build/out
+
+sources:
+  rootfs_overlay: portusos-build/rootfs/overlay
+  local_package_stage: portusos-build/packages/local
+  artools_profile: portusos-build/iso/artools-profile
+  calamares_responsibilities: portusos-build/installer/responsibilities.yaml
+  calamares_modules: portusos-build/installer/modules
+  calamares_config: portusos-build/installer/config
+  calamares_live: portusos-build/installer/live
+
+clean_policy:
+  allowed_roots:
+    - portusos-build/work
+    - portusos-build/cache
+    - portusos-build/out
+  arbitrary_path_delete: false

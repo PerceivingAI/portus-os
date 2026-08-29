@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portusos.local/schemas/build-metadata.schema.json",
+  "title": "PortusOS build metadata v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "release_class", "candidate_id", "version", "rc_number", "source_revision", "source_tree_clean", "build_started_at", "build_finished_at", "builder", "artifact", "package_source_manifest_ref", "codex_pin_ref", "portus_browser_pin_ref", "portus_mcp_pin_ref", "tunnel_client_pin_ref", "validation_authority_revision", "release_authority_revision"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "release_class": {"enum": ["development_rc", "public_rc"]},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "version": {"type": ["string", "null"]},
+    "rc_number": {"type": "integer", "minimum": 1},
+    "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "source_tree_clean": {"type": "boolean"},
+    "build_started_at": {"type": "string", "minLength": 1},
+    "build_finished_at": {"type": "string", "minLength": 1},
+    "builder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture", "distribution", "distribution_snapshot", "artools_version", "rust_toolchain"],
+      "properties": {
+        "architecture": {"const": "x86_64"},
+        "distribution": {"const": "Artix Linux"},
+        "distribution_snapshot": {"type": "string", "minLength": 1},
+        "artools_version": {"type": "string", "minLength": 1},
+        "rust_toolchain": {"type": "string", "minLength": 1}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "size_bytes"],
+      "properties": {
+        "filename": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "package_source_manifest_ref": {"type": "string", "minLength": 1},
+    "codex_pin_ref": {"type": "string", "minLength": 1},
+    "portus_browser_pin_ref": {"type": "string", "minLength": 1},
+    "portus_mcp_pin_ref": {"type": "string", "minLength": 1},
+    "tunnel_client_pin_ref": {"type": "string", "minLength": 1},
+    "validation_authority_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "release_authority_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+  }
+}

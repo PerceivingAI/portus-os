@@ -1,0 +1,12 @@
+packages-base: []
+packages-init:
+  openrc: []
+packages-apps: []
+packages-xorg: []
+packages-xlibre: []
+packages-misc: []
+packages-boot:
+  - grub
+  - artix-grub-live
+  - iso-initcpio
+  - mkinitcpio

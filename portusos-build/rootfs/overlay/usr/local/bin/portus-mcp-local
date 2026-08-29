@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mcp_root=/opt/portus/portus-mcp
+current_user=${USER:-$(id -un)}
+workspace="/workspace/${current_user}/master"
+state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/portus-mcp"
+policy=/etc/portus/portus-mcp/policy.json
+
+if [[ ! -d "$mcp_root" ]]; then
+  echo "portus-mcp-local: bundled Portus MCP payload is missing: $mcp_root" >&2
+  exit 69
+fi
+if [[ ! -d "$workspace" ]]; then
+  echo "portus-mcp-local: Master workspace is missing: $workspace" >&2
+  echo "Run portus-bootstrap first." >&2
+  exit 69
+fi
+if [[ ! -f "$policy" ]]; then
+  echo "portus-mcp-local: PortusOS MCP policy is missing: $policy" >&2
+  exit 69
+fi
+if [[ ! -f "$mcp_root/node_modules/tsx/dist/cli.mjs" ]]; then
+  echo "portus-mcp-local: bundled Portus MCP dependency payload is incomplete (tsx missing)" >&2
+  exit 69
+fi
+
+mkdir -p "$state_dir"
+export PORTUS_MCP_HOST=127.0.0.1
+export PORTUS_MCP_PORT=8789
+export PORTUS_MCP_PATH=/mcp
+export PORTUS_MCP_POLICY_PATH="$policy"
+export PORTUS_MCP_STATE_DIR="$state_dir"
+export PORTUS_MCP_PROJECTS="master=$workspace"
+export AGENT_SKILL_PATHS="$mcp_root/skills"
+export SUBAGENTS_SKILL_PATHS=
+
+cd "$mcp_root"
+exec npm start

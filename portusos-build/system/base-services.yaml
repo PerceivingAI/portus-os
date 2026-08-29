@@ -1,0 +1,82 @@
+schema_version: 1
+
+portus_services:
+  authority: runtime/install/install.toml
+
+services:
+  - id: system-dbus
+    role: system-dbus
+    lifecycle_owner: openrc
+    package_id: dbus
+    service_resolution: locked
+    service_name: dbus
+    runlevel_resolution: locked
+    runlevel: default
+    unresolved_reason: null
+    required_gate: L2
+
+  - id: elogind
+    role: login-session
+    lifecycle_owner: openrc
+    package_id: elogind
+    service_resolution: locked
+    service_name: elogind
+    runlevel_resolution: locked
+    runlevel: default
+    unresolved_reason: null
+    required_gate: L2
+
+  - id: networkmanager
+    role: networking
+    lifecycle_owner: openrc
+    package_id: networkmanager
+    service_resolution: locked
+    service_name: NetworkManager
+    runlevel_resolution: locked
+    runlevel: default
+    unresolved_reason: null
+    required_gate: L2
+
+  - id: openssh
+    role: ssh
+    lifecycle_owner: openrc
+    package_id: openssh
+    service_resolution: locked
+    service_name: sshd
+    runlevel_resolution: locked
+    runlevel: default
+    unresolved_reason: null
+    required_gate: L2
+
+  - id: nftables
+    role: firewall
+    lifecycle_owner: openrc
+    package_id: nftables
+    service_resolution: locked
+    service_name: nftables
+    runlevel_resolution: locked
+    runlevel: default
+    unresolved_reason: null
+    required_gate: L2
+
+  - id: chrony
+    role: time-sync
+    lifecycle_owner: openrc
+    package_id: chrony
+    service_resolution: locked
+    service_name: chrony
+    runlevel_resolution: locked
+    runlevel: default
+    unresolved_reason: null
+    required_gate: L2
+
+  - id: syslog
+    role: machine-logging
+    lifecycle_owner: openrc
+    package_id: syslog
+    service_resolution: locked
+    service_name: syslog-ng
+    runlevel_resolution: locked
+    runlevel: default
+    unresolved_reason: null
+    required_gate: L2

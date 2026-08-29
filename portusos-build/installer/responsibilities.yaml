@@ -1,0 +1,27 @@
+schema_version: 1
+framework: calamares
+custom_modules: [portus-storage]
+
+destructive_preflight:
+  explicit_target_required: true
+  plan_hash_required: true
+  matching_confirmation_required: true
+  default_target_allowed: false
+
+responsibilities:
+  - { id: preflight-disk-plan, mapping_resolution: locked, module_ids: [notesqml, portus-storage, summary], required_gate: L2 }
+  - { id: partition-layout, mapping_resolution: locked, module_ids: [portus-storage], required_gate: L2 }
+  - { id: luks-lvm-filesystems, mapping_resolution: locked, module_ids: [portus-storage], required_gate: L2 }
+  - { id: target-root, mapping_resolution: locked, module_ids: [portus-storage, unpackfs], required_gate: L2 }
+  - { id: machine-identity, mapping_resolution: locked, module_ids: [machineid, users], required_gate: L2 }
+  - { id: locale-keyboard-timezone, mapping_resolution: locked, module_ids: [locale, keyboard, localecfg, hwclock], required_gate: L2 }
+  - { id: fstab-crypttab, mapping_resolution: locked, module_ids: [portus-storage], required_gate: L2 }
+  - { id: packages-portus, mapping_resolution: locked, module_ids: [unpackfs], required_gate: L2 }
+  - { id: master-user, mapping_resolution: locked, module_ids: [users], required_gate: L2 }
+  - { id: networking-clock, mapping_resolution: locked, module_ids: [networkcfg, hwclock], required_gate: L2 }
+  - { id: mkinitcpio, mapping_resolution: locked, module_ids: [portus-storage, initcpio], required_gate: L2 }
+  - { id: openrc-services, mapping_resolution: locked, module_ids: [services-openrc], required_gate: L2 }
+  - { id: grub-uefi, mapping_resolution: locked, module_ids: [portus-storage, bootloader], required_gate: L2 }
+  - { id: portus-integration, mapping_resolution: locked, module_ids: [unpackfs, shellprocess], required_gate: L2 }
+  - { id: installed-target-validation, mapping_resolution: locked, module_ids: [shellprocess], required_gate: L2 }
+  - { id: finish-unmount, mapping_resolution: locked, module_ids: [umount, finished], required_gate: L2 }

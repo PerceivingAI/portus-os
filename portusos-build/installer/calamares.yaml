@@ -1,0 +1,70 @@
+schema_version: 1
+framework: calamares
+custom_modules_policy: verified-gap-only
+
+ui_sequence:
+  - welcome
+  - locale
+  - keyboard
+  - user-credentials
+  - storage-recovery
+  - summary-destructive-review
+  - install
+  - completion-reboot
+
+inputs:
+  storage: portusos-build/system/storage.yaml
+  packages: portusos-build/packages/packages.yaml
+  portus_install: runtime/install/install.toml
+  services: portusos-build/system/base-services.yaml
+  identities: portusos-build/system/identities.yaml
+
+package_evidence:
+  repository: world
+  version: "3.4.2-4"
+  architecture: x86_64
+  sha256: 4e8e70ebd9a4f6834b7c592ac698c14d6709aef6b0391f3d8673a4b0ab06130f
+  signature_signer: Artix Buildbot <buildbot@artixlinux.org>
+  signing_key: 0A3EB6BB142C56653300420C1247D995F165BBAC
+
+verified_modules:
+  - welcome
+  - locale
+  - keyboard
+  - partition
+  - users
+  - notesqml
+  - summary
+  - mount
+  - unpackfs
+  - machineid
+  - localecfg
+  - fstab
+  - initcpiocfg
+  - initcpio
+  - networkcfg
+  - hwclock
+  - services-openrc
+  - openrcdmcryptcfg
+  - grubcfg
+  - bootloader
+  - shellprocess
+  - umount
+  - finished
+
+module_set:
+  resolution: locked
+  version: "3.4.2-4"
+  value: artix-3.4.2-4-stock-notesqml-plus-portus-storage-v2
+  unresolved_reason: null
+  required_gate: L2
+
+storage_implementation:
+  resolution: linux-verified
+  value: null
+  unresolved_reason: the signed notesqml GlobalStorage input page plus portus-storage preflight/prepare/finalize path now implement explicit target selection, independent owner/recovery credentials, size-bound plan hashing, locked GPT/LUKS2/LVM creation and dynamic target boot/storage configuration with host-safe tests; signed-Calamares live loading, destructive blank-VM proof, cleanup/logging evidence and installed boot validation remain required before this becomes locked
+  required_gate: L2/L7
+
+installed_target_validation:
+  resolution: generated
+  source_authority: docs/VALIDATION.md

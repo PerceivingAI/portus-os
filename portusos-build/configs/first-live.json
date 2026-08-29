@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "name": "first-live",
+  "description": "Canonical iterative build request for the first interactive, connectable PortusOS live ISO.",
+  "build": {
+    "mode": "development",
+    "preflight": "standard",
+    "source_cleanliness": "require_clean",
+    "label": "first-live"
+  },
+  "target": {
+    "composition_contract": "portusos-build/contracts/build.yaml",
+    "iso_profile": "portusos-build/iso/profile.yaml",
+    "installer_plan_disk_mib": 81920
+  }
+}

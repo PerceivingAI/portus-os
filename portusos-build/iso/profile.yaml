@@ -1,0 +1,43 @@
+schema_version: 1
+framework: artools
+architecture: x86_64
+firmware: uefi
+secure_boot: false
+installer: calamares
+
+inputs:
+  packages: portusos-build/packages/packages.yaml
+  storage: portusos-build/system/storage.yaml
+  vm_profiles: portusos-build/system/vm-profiles.yaml
+  calamares: portusos-build/installer/calamares.yaml
+  portus_install: runtime/install/install.toml
+
+live_environment:
+  interactive_required: true
+  networking_required: true
+  master_user_required: true
+  x11_i3_required: true
+  alacritty_tmux_required: true
+  codex_required: true
+  chromium_required: true
+  codex_chatgpt_browser_login_required: true
+  portus_runtime_required: true
+  portus_mcp_bundled_required: true
+  tunnel_client_bundled_required: true
+  tunnel_setup_optional: true
+  calamares_required: true
+  recovery_tools_required: true
+  protected_credentials_preprovisioned: false
+
+artools_profile:
+  resolution: locked
+  value: portus
+  unresolved_reason: null
+  required_gate: L2
+
+build_host:
+  distribution: Linux
+  architecture: x86_64
+  native_required: true
+  artix_build_context: Artix Linux
+  artix_context_isolated_required: true

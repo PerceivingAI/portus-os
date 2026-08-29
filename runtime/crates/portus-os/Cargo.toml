@@ -1,0 +1,22 @@
+[package]
+name = "portus-os"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+clap = { workspace = true }
+portus-client = { path = "../portus-client" }
+portus-protocol = { path = "../portus-protocol" }
+portus-state = { path = "../portus-state" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+portus-artifact = { path = "../portus-artifact" }
+portusd = { path = "../portusd" }
+
+[lints]
+workspace = true

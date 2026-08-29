@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portusos.local/schemas/build-config.schema.json",
+  "title": "PortusOS build configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "name", "build", "target"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "description": {"type": "string", "minLength": 1},
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "preflight", "source_cleanliness", "label"],
+      "properties": {
+        "mode": {"enum": ["development", "release_candidate"]},
+        "preflight": {"enum": ["standard", "full", "skip"]},
+        "source_cleanliness": {"enum": ["require_clean", "allow_dirty"]},
+        "label": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"mode": {"const": "release_candidate"}},
+            "required": ["mode"]
+          },
+          "then": {
+            "properties": {"source_cleanliness": {"const": "require_clean"}}
+          }
+        }
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["composition_contract", "iso_profile", "installer_plan_disk_mib"],
+      "properties": {
+        "composition_contract": {"const": "portusos-build/contracts/build.yaml"},
+        "iso_profile": {"const": "portusos-build/iso/profile.yaml"},
+        "installer_plan_disk_mib": {
+          "type": "integer",
+          "minimum": 40960,
+          "maximum": 1048576
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+schema_version: 1
+resolution: locked
+
+target:
+  architecture: x86_64
+  firmware: uefi
+  partition_table: gpt
+  secure_boot: false
+
+partitions:
+  esp:
+    size_mib: 512
+    filesystem: fat32
+    mount: /boot/efi
+    encrypted: false
+  boot:
+    size_mib: 2048
+    filesystem: ext4
+    mount: /boot
+    encrypted: false
+  system:
+    encryption:
+      format: luks2
+      cipher: aes-xts-plain64
+      key_bits: 512
+      pbkdf: argon2id
+      target_time_ms: 2000
+      memory_limit_kib: 262144
+      owner_keyslot_required: true
+      recovery_keyslot_required: true
+      automatic_unlock: false
+    lvm:
+      vg: portus
+      root_filesystem: ext4
+      swap_mib: 4096
+      free_reserve_percent: 5
+      split_home: false
+      split_var: false
+      split_srv: false
+
+boot:
+  bootloader: grub-uefi
+  bootloader_id: PortusOS
+  esp_mount: /boot/efi
+  default_kernel_role: linux-lts
+  alternate_kernel_role: linux
+  menu_timeout_seconds: 5
+  fallback_efi_path: EFI/BOOT/BOOTX64.EFI
+  initramfs:
+    framework: mkinitcpio
+    systemd_hooks: false
+    normal_and_fallback_for_both_kernels: true

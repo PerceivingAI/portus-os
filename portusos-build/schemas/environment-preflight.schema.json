@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portusos.local/schemas/environment-preflight.schema.json",
+  "title": "PortusOS mandatory build environment preflight v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "checked_at", "overall", "native_build_allowed", "build_config", "summary", "checks"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "checked_at": {"type": "string", "minLength": 1},
+    "overall": {"enum": ["pass", "warn", "block"]},
+    "native_build_allowed": {"type": "boolean"},
+    "build_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "source_path", "sha256"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "source_path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pass", "warn", "block"],
+      "properties": {
+        "pass": {"type": "integer", "minimum": 0},
+        "warn": {"type": "integer", "minimum": 0},
+        "block": {"type": "integer", "minimum": 0}
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "requirement_class", "result", "observed", "reason", "remediation"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+          "requirement_class": {"enum": ["bootstrap", "outer-host", "isolated-artix", "input-availability", "resource", "contamination", "privilege"]},
+          "result": {"enum": ["pass", "warn", "block"]},
+          "observed": {"type": ["string", "null"]},
+          "reason": {"type": "string", "minLength": 1},
+          "remediation": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

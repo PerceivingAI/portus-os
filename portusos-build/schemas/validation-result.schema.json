@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portusos.local/schemas/validation-result.schema.json",
+  "title": "PortusOS ISO validation result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidate_id", "iso_sha256", "test_id", "execution_class", "status", "environment", "started_at", "ended_at", "assertions", "commands_ref", "evidence_refs", "redaction_applied", "notes", "blocking_reason"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "iso_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "test_id": {"type": "string", "pattern": "^ISO-(0[1-9]|[12][0-9]|3[0-8])$"},
+    "execution_class": {"enum": ["automated", "assisted", "manual"]},
+    "status": {"enum": ["pass", "fail", "blocked", "not_run"]},
+    "environment": {"enum": ["reference", "minimum", "build-host", "recovery"]},
+    "started_at": {"type": "string", "minLength": 1},
+    "ended_at": {"type": "string", "minLength": 1},
+    "assertions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "evidence_refs"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "status": {"enum": ["pass", "fail"]},
+          "evidence_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "commands_ref": {"const": "commands.jsonl"},
+    "evidence_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "redaction_applied": {"type": "boolean"},
+    "notes": {"type": "array", "items": {"type": "string"}},
+    "blocking_reason": {"type": ["string", "null"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "pass"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "assertions": {"minItems": 1},
+          "evidence_refs": {"minItems": 1},
+          "redaction_applied": {"const": true},
+          "blocking_reason": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"enum": ["blocked", "not_run"]}}, "required": ["status"]},
+      "then": {"properties": {"blocking_reason": {"type": "string", "minLength": 1}}}
+    }
+  ]
+}

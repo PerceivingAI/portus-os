@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "method": "verified-live-squashfs-overlay",
+  "seed": {
+    "url": "https://artix.unixpeople.org/iso/artix-base-openrc-20260813-x86_64.iso",
+    "cache_path": "portusos-build/cache/artix-bootstrap/artix-base-openrc-20260813-x86_64.iso",
+    "sha256": "6f75cf428b6b2df2d387eceff0d08fb0d93eeff39ec30e0957fbca7851bdf5c6",
+    "size_bytes": 1235945472,
+    "volume_id": "ARTIX_202608",
+    "rootfs": {
+      "iso_path": "/LIVEOS/ROOTFS.IMG",
+      "offset_bytes": 234659840,
+      "size_bytes": 997089280,
+      "filesystem": "squashfs",
+      "compression": "zstd"
+    }
+  },
+  "context": {
+    "work_root": "portusos-build/work/artix-context",
+    "lower_mount": "lower",
+    "upper_dir": "upper",
+    "overlay_work_dir": "overlay-work",
+    "root_mount": "root",
+    "repo_mount": "/workspace/portus-os",
+    "state_path": "portusos-build/work/l2/context-state.json",
+    "facts_path": "portusos-build/work/l2/artix-l0-l2-facts.tsv"
+  },
+  "bootstrap_packages": [
+    "artools-base",
+    "artools-iso",
+    "artools-pkg",
+    "git"
+  ]
+}

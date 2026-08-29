@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+# P16-LINUX-RESOLUTION-REQUIRED
+# This package-owned template is not an installable /etc/init.d script yet.
+# Track L must resolve dependencies, runlevel enablement, and bounded
+# supervise-daemon/health parameters against the real Artix environment.
+
+name="PortusOS protected API provider"
+description="Non-exporting protected API provider for PortusOS"
+command="/usr/bin/portus-apid"
+command_user="portus-api:portus-api"
+umask="0077"
+required_dirs="/run/portus/protected-api /var/lib/portus/protected-api /var/log/portus/audit"
+required_files="/etc/portus/policy/policy.toml /usr/share/portus/policy/actions.toml"

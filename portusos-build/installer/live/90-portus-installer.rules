@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Live-ISO only: allow the artools-created wheel live user to launch Calamares
+// without requiring a separate graphical polkit authentication agent.
+polkit.addRule(function(action, subject) {
+    if (action.id == "io.calamares.calamares.pkexec.run" && subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+});

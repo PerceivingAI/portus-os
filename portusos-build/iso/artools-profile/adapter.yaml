@@ -1,0 +1,27 @@
+schema_version: 1
+framework: artools
+mapping_resolution: locked
+required_gate: L2
+native_build_host:
+  distribution: Linux
+  architecture: x86_64
+artix_build_context:
+  distribution: Artix Linux
+  isolated_required: true
+context_manager: scripts/artix/context.py
+bootstrap_contract: portusos-build/artix/bootstrap.json
+profile_name: portus
+workspace_profiles_dir: iso-profiles
+profile_source_root: portusos-build/iso/artools-profile/workspace
+rootfs_overlay_source: portusos-build/rootfs/overlay
+local_package_stage_source: portusos-build/packages/local
+stable_pacman_config: /usr/share/artools/pacman.conf.d/iso-x86_64.conf
+buildiso_executable: /usr/bin/buildiso
+buildiso_fixed_args: [-p, portus, -R, stable, -a, x86_64, -i, openrc]
+buildiso_chroots_flag: -r
+buildiso_target_flag: -t
+live_boot_kernel_package: linux-lts
+output_subdirectory: portus
+output_filename_prefix: artix-portus-openrc-
+output_filename_suffix: -x86_64.iso
+unresolved_reason: null

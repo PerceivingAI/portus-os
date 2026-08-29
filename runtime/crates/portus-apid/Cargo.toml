@@ -1,0 +1,27 @@
+[package]
+name = "portus-apid"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+ctrlc = { workspace = true }
+portus-audit = { path = "../portus-audit" }
+portus-client = { path = "../portus-client" }
+portus-policy = { path = "../portus-policy" }
+portus-protected-api = { path = "../portus-protected-api" }
+portus-protocol = { path = "../portus-protocol" }
+reqwest = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.31", features = ["fs", "socket", "user"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,42 @@
+manifest_version = 1
+skills = ["protected-api"]
+
+[provider]
+type = "protected-api"
+label = "Protected API Provider"
+scope_support = ["system"]
+software_version = "0.1.0"
+
+[[interfaces]]
+id = "cli"
+type = "executable"
+contract_version = 1
+executable = "/usr/bin/portus-api"
+structured_output = true
+
+[[interfaces]]
+id = "use-socket"
+type = "unix-socket"
+contract_version = 1
+socket = "/run/portus/protected-api/use.sock"
+structured_output = true
+
+[[capabilities]]
+id = "protected-api.request"
+contract_version = 1
+interfaces = ["cli", "use-socket"]
+
+[[resources]]
+type = "protected-credential"
+authority = "provider"
+lifetime = "durable"
+
+[lifecycle]
+owner = "portus-supervised"
+
+[health]
+kind = "structured-cli"
+reference = "cli"
+
+[policy]
+domain_owner = "provider"

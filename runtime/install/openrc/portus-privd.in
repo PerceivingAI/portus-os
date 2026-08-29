@@ -1,0 +1,12 @@
+#!/sbin/openrc-run
+# P16-LINUX-RESOLUTION-REQUIRED
+# This package-owned template is not an installable /etc/init.d script yet.
+# Track L must resolve dependencies, runlevel enablement, and bounded
+# supervise-daemon/health parameters against the real Artix environment.
+
+name="PortusOS privilege boundary"
+description="Typed root privilege boundary for PortusOS"
+command="/usr/bin/portus-privd"
+command_user="root:root"
+required_dirs="/run/portus/priv /var/log/portus/audit"
+required_files="/etc/portus/policy/policy.toml /usr/share/portus/policy/actions.toml"

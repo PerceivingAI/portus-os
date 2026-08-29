@@ -1,0 +1,20 @@
+schema_version: 1
+id: portus-browser
+source_class: portus-owned
+
+integration_contract: runtime/integrations/portus-browser/integration.toml
+provider_manifest: runtime/integrations/manifests/portus-browser.toml
+
+source:
+  repository: https://github.com/PerceivingAI/portus-browser.git
+  revision:
+    resolution: locked
+    value: c263c3997b4e6f2f7df5922e062a9e949e22f755
+    required_gate: L2
+  source_tree_required_clean: true
+
+packaging:
+  resolution: linux-verified
+  evidence_ref: null
+  unresolved_reason: installed CLI Broker native-host extension skill and Chromium native-messaging chain require Artix/VM verification
+  required_gate: L5

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portusos.local/oss/release-policy.schema.json",
+  "title": "PortusOS public release policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "authority", "first_public_release", "first_party_license", "repository", "signing", "support", "unresolved_owner_decisions"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "authority": {"const": "docs/RELEASE.md"},
+    "first_public_release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "maturity", "public_label", "scope"],
+      "properties": {
+        "version": {"const": "0.1.0"},
+        "maturity": {"const": "technical-preview"},
+        "public_label": {"const": "PortusOS 0.1.0 Technical Preview"},
+        "scope": {"const": "x86_64 VMware-first technical preview"}
+      }
+    },
+    "first_party_license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spdx", "license_file"],
+      "properties": {
+        "spdx": {"const": "Apache-2.0"},
+        "license_file": {"const": "LICENSE"}
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "external_code_contributions", "issues", "private_vulnerability_reporting"],
+      "properties": {
+        "host": {"const": "github"},
+        "external_code_contributions": {"const": false},
+        "issues": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "accepted", "general_support_channel", "security_reports_allowed"],
+          "properties": {
+            "enabled": {"const": true},
+            "accepted": {"const": ["reproducible-bug", "documentation-defect"]},
+            "general_support_channel": {"const": false},
+            "security_reports_allowed": {"const": false}
+          }
+        },
+        "private_vulnerability_reporting": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mechanism", "activation_status", "notifications_reviewed"],
+          "properties": {
+            "mechanism": {"const": "github-private-vulnerability-reporting"},
+            "activation_status": {"enum": ["pending-public-repository", "active"]},
+            "notifications_reviewed": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mechanism", "signed_object", "namespace", "signer_identity", "private_key_custody", "public_key_ref", "public_key_status"],
+      "properties": {
+        "mechanism": {"const": "openssh-sshsig-ed25519"},
+        "signed_object": {"const": "SHA256SUMS"},
+        "namespace": {"const": "portusos-release"},
+        "signer_identity": {"const": "portusos-release"},
+        "private_key_custody": {"const": "external-offline-owner-controlled-encrypted"},
+        "public_key_ref": {"const": "release/keys/portusos-release.allowed_signers"},
+        "public_key_status": {"enum": ["pending-key-ceremony", "active", "retired"]}
+      }
+    },
+    "support": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "supported_release", "end_condition", "release_candidate_support", "lts", "sla", "guaranteed_update_cadence"],
+      "properties": {
+        "level": {"const": "best-effort"},
+        "supported_release": {"const": "current-public-final-only"},
+        "end_condition": {"const": "superseded-or-withdrawn"},
+        "release_candidate_support": {"const": false},
+        "lts": {"const": false},
+        "sla": {"const": false},
+        "guaranteed_update_cadence": {"const": false}
+      }
+    },
+    "unresolved_owner_decisions": {
+      "const": []
+    }
+  }
+}

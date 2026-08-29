@@ -1,0 +1,73 @@
+live-session:
+  user: portus
+  password: portus-live
+  autologin: true
+  use-xlibre: false
+  services:
+    - dbus
+    - elogind
+    - NetworkManager
+    - sshd
+    - nftables
+    - chrony
+    - syslog-ng
+  user-services: []
+
+rootfs:
+  packages:
+    - base
+    - linux-lts
+    - linux
+    - linux-firmware
+    - intel-ucode
+    - amd-ucode
+    - grub
+    - efibootmgr
+    - cryptsetup
+    - lvm2
+    - e2fsprogs
+    - dosfstools
+    - mkinitcpio
+    - mtools
+    - dbus
+    - dbus-openrc
+    - elogind
+    - elogind-openrc
+    - networkmanager
+    - networkmanager-openrc
+    - openssh
+    - openssh-openrc
+    - nftables
+    - nftables-openrc
+    - chrony
+    - chrony-openrc
+    - syslog-ng
+    - syslog-ng-openrc
+    - tmux
+    - git
+    - curl
+    - ca-certificates
+    - bubblewrap
+    - nodejs
+    - npm
+    - xorg-server
+    - xorg-xinit
+    - xorg-xprop
+    - i3-wm
+    - alacritty
+    - mesa
+    - maim
+    - xdotool
+    - polkit
+    - ungoogled-chromium
+    - xdg-utils
+  packages-init:
+    openrc: []
+
+livefs:
+  packages:
+    - artix-live-base
+    - artix-live-openrc
+    - calamares
+  packages-init:
+    openrc: []

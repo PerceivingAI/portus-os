@@ -1,0 +1,9 @@
+set $mod Mod4
+font pango:monospace 10
+
+# Normal PortusOS live entry: open the Master bootstrap in the first terminal.
+exec --no-startup-id sh -c 'if command -v portus-bootstrap >/dev/null 2>&1; then exec alacritty -e portus-bootstrap; else exec alacritty; fi'
+
+bindsym $mod+Return exec alacritty
+bindsym $mod+i exec --no-startup-id portus-install
+bindsym $mod+Shift+e exec --no-startup-id i3-msg exit
