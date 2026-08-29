@@ -31,7 +31,7 @@ In particular:
 - OpenAI `tunnel-client` is Apache-2.0 and is pinned to v0.0.13 for the first-ISO path; the machine contract records the official Linux x86_64 zip digest plus the matching upstream licence/SPDX/Sigstore provenance asset names for later candidate capture.
 - Calamares upstream source uses GPL-3.0-or-later identifiers; the selected Artix package and shipped notices remain L2/R8 evidence.
 - Chromium is treated as a multi-licence codebase; the exact Artix package-provided third-party notices are required rather than collapsing it to one licence label.
-- Artix runtime packages, firmware/microcode and any VMware guest package are finalized from the generated L2 package lock and package metadata.
+- Artix runtime packages, firmware/microcode and any VMware guest package are finalized from the generated L2 package lock and package metadata. As current build evidence, the newly required official Artix `memtest86+ 7.20-2` package reports licence metadata `GPL2` and supplies `/boot/memtest86+/memtest.bin`; the exact candidate package identity/licence treatment remains part of the generated package lock and R8 review.
 - PortusBrowser is Portus-owned but comes from a separate repository; its current root licence is MIT. The exact clean source revision and component notices/licence state must still be rechecked at freeze.
 
 ## Release rule

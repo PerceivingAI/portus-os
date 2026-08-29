@@ -1,10 +1,10 @@
 # PortusOS ISO Build Harness
 
-**Last reviewed:** 2026-08-29T06:22:02Z
+**Last reviewed:** 2026-08-29T06:31:18Z
 
 **Status:** Authoritative for repeated PortusOS ISO build orchestration, build-configuration semantics, per-attempt logging/metadata, artifact capture, and the handoff from repository source to the native Artix ISO adapter.
 
-**Last reconciled:** 2026-08-29T06:22:02Z
+**Last reconciled:** 2026-08-29T06:31:18Z
 
 **ISO architecture authority:** `docs/ISO_BUILD_INSTALLER.md`
 
@@ -634,7 +634,7 @@ Credentials needed after boot are provisioned through their own runtime/setup bo
 
 The config-driven iteration harness and **native Artix execution path are implemented**. The repository knows the verified isolated context, `artools 0.39.1-1` interface, `portus` profile layout, fixed `buildiso` arguments, selected package set, OpenRC service identities, live-session path, expected ISO output naming, run-scoped privilege boundary, and cleanup proof contract.
 
-The current implementation frontier is **late native bootfs/final-ISO construction**, not adapter discovery, payload staging, or native process invocation. Public-repository run `20260829T060019Z-3afadb080c36-dev-first-live` on source commit `3afadb0` reached real `buildiso`, completed rootfs/livefs package installation, retained both installed kernels, generated installed initramfs artifacts, selected `linux-lts` for the live kernel, and generated its live initramfs. `buildiso` then exited nonzero while assembling bootfs because it attempted to copy `/run/artools/livefs/boot/memtest86+/memtest.bin`, which is absent from the current tracked boot package set. `native-cleanup.json` passed with zero current-run mount/process/seed-loop leakage and removal of the run-scoped Artix context.
+The current implementation frontier is **late native bootfs/final-ISO construction**, not adapter discovery, payload staging, or native process invocation. Public-repository run `20260829T060019Z-3afadb080c36-dev-first-live` on source commit `3afadb0` reached real `buildiso`, completed rootfs/livefs package installation, retained both installed kernels, generated installed initramfs artifacts, selected `linux-lts` for the live kernel, and generated its live initramfs. At that run revision, `buildiso` then exited nonzero while assembling bootfs because it attempted to copy `/run/artools/livefs/boot/memtest86+/memtest.bin`, which the then-current boot package set did not provide. The package contract has since been corrected to include the verified official Artix `memtest86+` provider; a new native run is still required to prove the corrected path. `native-cleanup.json` from the failed run passed with zero current-run mount/process/seed-loop leakage and removal of the run-scoped Artix context.
 
 The supported progression is therefore:
 

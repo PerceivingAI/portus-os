@@ -1,7 +1,7 @@
 # PortusOS First-ISO Validation Authority
 
-**Last reviewed:** 2026-08-29T06:22:02Z
-**Last updated:** 2026-08-29T06:22:02Z
+**Last reviewed:** 2026-08-29T06:31:18Z
+**Last updated:** 2026-08-29T06:31:18Z
 
 **Status:** Authoritative executable validation contract for the first ISO
 **Acceptance scope:** ISO-01 through ISO-38 from `docs/ACCEPTANCE.md`
@@ -722,7 +722,7 @@ A useful partially passing candidate remains a development artifact but is not t
 
 Before the first candidate can run this matrix end-to-end, the supported Artix/native build and installed-system verification path must freeze the exact identities that remain intentionally unresolved, including as applicable:
 
-The current public native build has already proved real rootfs/livefs construction, both installed kernel lines, and `linux-lts` live-initramfs generation. It has **not** yet produced a candidate ISO: run `20260829T060019Z-3afadb080c36-dev-first-live` stopped during bootfs assembly at the missing `/run/artools/livefs/boot/memtest86+/memtest.bin` path. That input decision is now resolved: official Artix `memtest86+ 7.20-2` was verified to supply the exact file and is tracked in the first-ISO package/boot profile with a fail-closed regression check. Before candidate validation begins, the canonical build must prove that correction through final bootfs, squashfs/ISO creation and checksum evidence.
+The current public native build has already proved real rootfs/livefs construction, both installed kernel lines, and `linux-lts` live-initramfs generation. It has **not** yet produced a candidate ISO: run `20260829T060019Z-3afadb080c36-dev-first-live` stopped during bootfs assembly at the missing `/run/artools/livefs/boot/memtest86+/memtest.bin` path. That input decision is now resolved: direct inspection of official Artix `world` package `memtest86+ 7.20-2` verified the exact `/boot/memtest86+/memtest.bin` payload, no package dependencies, and package licence metadata `GPL2`. The package is tracked in the first-ISO package/boot profile with a fail-closed regression check. Before candidate validation begins, the canonical build must prove that correction through final bootfs, squashfs/ISO creation and checksum evidence.
 
 - Artix repository/keyring/build snapshot and `artools` entry point;
 - exact Calamares modules/package identities;

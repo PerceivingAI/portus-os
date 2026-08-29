@@ -1,7 +1,7 @@
 # PortusOS Package and Supply-Chain Policy
 
-**Last reviewed:** 2026-08-29T01:24:50Z
-**Last updated:** 2026-08-29T01:24:50Z
+**Last reviewed:** 2026-08-29T06:31:18Z
+**Last updated:** 2026-08-29T06:31:18Z
 
 **Status:** Authoritative for the locked first-ISO package-source boundary and top-level package inventory; candidate versions/repository lock, remaining profile decisions and candidate redistribution/installed evidence still require verification
 **Target:** First accepted x86_64 VMware development ISO
@@ -31,6 +31,25 @@ The exact enabled official repositories, mirrors, package versions and lock/reso
 - do not replace an available suitable official Artix package merely because another source is newer or more convenient;
 - do not add software merely because it exists in an Artix repository; package inclusion remains capability-driven;
 - the selected first-ISO top-level package names are now locked in `portusos-build/packages/packages.yaml`; future additions or candidate-version changes still require repository verification rather than assumption.
+
+### 2.1 Boot-package evidence from the first native build
+
+The first public native `buildiso` run exposed a concrete package-contract omission rather than an `artools` implementation defect. Locked `artools 0.39.1-1` attempted to copy `/run/artools/livefs/boot/memtest86+/memtest.bin` during bootfs assembly. Direct inspection of the official Artix `world` repository then established the required source and payload:
+
+```text
+package: memtest86+
+version observed: 7.20-2
+repository: official Artix world
+package file: memtest86+-7.20-2-any.pkg.tar.zst
+installed payload: /boot/memtest86+/memtest.bin
+additional payload: /etc/grub.d/60_memtest86+
+package dependencies: none
+Artix package licence metadata: GPL2
+```
+
+Because the official package supplies the exact file expected by the locked `artools` path, PortusOS resolves this failure by tracking `memtest86+` as a first-ISO boot input. It is present in `portusos-build/packages/packages.yaml` and in the `packages-boot` section of the locked artools profile. The build validator fails closed if that boot package is later removed.
+
+This is the preferred package-policy outcome: use the verified official Artix package that satisfies the build/runtime contract rather than creating a placeholder file or patching upstream tooling to ignore a required asset. The observed `7.20-2` identity is current build evidence, not yet the final candidate package lock; the exact candidate identity and licence/redistribution evidence still belong in generated `packages.lock.yaml` and the R8 audit.
 
 ## 3. AUR boundary
 
