@@ -440,7 +440,7 @@ The harness executes these phases in order:
 11. run unprivileged scripts/artix/stage_first_iso.py with a sanitized child environment
 12. write/hash staging-evidence.json and the run-owned native workspace
 13. invoke portus-build build-iso with PORTUS_BUILD_STAGING_MANIFEST
-14. require an already-authorized sudo ticket; never prompt inside the harness
+14. authorize privilege at the native handoff: reuse a valid `sudo -n -v` ticket, otherwise refresh with terminal-owned `sudo -v` only when interactive; noninteractive/no-ticket runs fail closed with exit `78`
 15. clone the prepared Artix upper into a fresh run-owned upper/work pair, enter a private mount namespace, and invoke the locked Artix buildiso mapping
 16. after the namespace exits, write/validate native-cleanup.json proving zero current-run cross-namespace mount references, zero process root/cwd/fd references, zero newly leaked Artix-seed loop devices, and removal of the run-scoped Artix scratch tree
 17. reject native success unless cleanup evidence is PASS, then require exactly one produced .iso and write native-build-result.json
@@ -485,7 +485,7 @@ The installer input surface uses the signed stock `notesqml` view module, not a 
 
 Installer-runtime secrets remain intentionally outside the build manifest. The target device and credentials exist only while Calamares runs in the live system and must not be supplied through build configuration or inherited environment. `calamares.storage-implementation` remains release-unresolved only for signed-Calamares live loading, destructive blank-VM behavior, cleanup/logging evidence and installed-boot validation—not because the runtime input/settings path is still missing.
 
-Privilege is owner-authorized rather than harness-prompted. `portus-build build-iso` first requires `sudo -n -v`; if no ticket exists it returns unresolved exit `78` with the instruction to run `sudo -v` in the VM terminal and rerun the same canonical build command. No password enters the harness or build log.
+Privilege is owner-authorized at the native handoff. `portus-build build-iso` first checks `sudo -n -v`; a still-valid cached ticket is reused. If that ticket has expired and stdin is an interactive terminal, the builder runs `sudo -v` exactly at the privileged handoff so long unprivileged preflight/staging work cannot consume the authorization window. `sudo` owns the terminal prompt directly: Portus code never requests, reads, stores, or echoes the password. After a successful refresh, the bounded helper still runs with `sudo -n`. If no ticket is valid and no interactive terminal is attached, the build fails closed with unresolved exit `78` rather than attempting a prompt.
 
 The privileged helper first clones the canonical prepared Artix `upper` into a fresh run-owned Artix context below that build's native work root. The run-owned context has its own OverlayFS `upper` and `workdir`; the canonical prepared `upper/work` pair is never mounted directly by native `buildiso`. The helper then creates a private mount namespace, changes mount propagation to private **before the first native mount**, mounts the verified Artix seed plus the run-owned OverlayFS and required `proc`/`sys`/`dev`/repo views inside that namespace, bind-mounts only the run-owned native workspace at `/run/portus-build`, and invokes the locked `buildiso` mapping.
 

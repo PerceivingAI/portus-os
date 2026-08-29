@@ -10,6 +10,7 @@ use portus_build::{
 };
 use std::{
     env, fs,
+    io::{self, IsTerminal},
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode},
 };
@@ -256,6 +257,73 @@ fn execute(cli: Cli) -> Result<Option<String>, BuildError> {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum SudoAuthorizationMode {
+    Cached,
+    RefreshInteractive,
+    Unresolved,
+}
+
+fn sudo_authorization_mode(
+    cached_ticket_valid: bool,
+    stdin_is_terminal: bool,
+) -> SudoAuthorizationMode {
+    if cached_ticket_valid {
+        SudoAuthorizationMode::Cached
+    } else if stdin_is_terminal {
+        SudoAuthorizationMode::RefreshInteractive
+    } else {
+        SudoAuthorizationMode::Unresolved
+    }
+}
+
+fn sudo_ticket_valid() -> Result<bool, BuildError> {
+    ProcessCommand::new("sudo")
+        .args(["-n", "-v"])
+        .status()
+        .map(|status| status.success())
+        .map_err(|error| {
+            BuildError::Unresolved(format!(
+                "native ISO construction cannot invoke sudo: {error}"
+            ))
+        })
+}
+
+fn ensure_native_sudo_authorization() -> Result<(), BuildError> {
+    match sudo_authorization_mode(sudo_ticket_valid()?, io::stdin().is_terminal()) {
+        SudoAuthorizationMode::Cached => Ok(()),
+        SudoAuthorizationMode::Unresolved => Err(BuildError::Unresolved(
+            "native ISO construction needs owner-authorized sudo; no cached ticket is valid and the build is not attached to an interactive terminal"
+                .to_string(),
+        )),
+        SudoAuthorizationMode::RefreshInteractive => {
+            println!(
+                "native ISO construction requires owner authorization; refreshing sudo at the privileged handoff"
+            );
+            let status = ProcessCommand::new("sudo")
+                .arg("-v")
+                .status()
+                .map_err(|error| {
+                    BuildError::Unresolved(format!(
+                        "native ISO construction cannot refresh sudo authorization: {error}"
+                    ))
+                })?;
+            if !status.success() {
+                return Err(BuildError::Unresolved(
+                    "native ISO construction was not authorized by the owner".to_string(),
+                ));
+            }
+            if !sudo_ticket_valid()? {
+                return Err(BuildError::Unresolved(
+                    "sudo authorization refresh returned success but no noninteractive ticket is available"
+                        .to_string(),
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
 fn execute_native_iso(repo: &Path) -> Result<(), BuildError> {
     let manifest = env::var_os("PORTUS_BUILD_STAGING_MANIFEST")
         .map(PathBuf::from)
@@ -272,21 +340,7 @@ fn execute_native_iso(repo: &Path) -> Result<(), BuildError> {
         )));
     }
 
-    let sudo_check = ProcessCommand::new("sudo").args(["-n", "-v"]).status();
-    match sudo_check {
-        Ok(status) if status.success() => {}
-        Ok(_) => {
-            return Err(BuildError::Unresolved(
-                "native ISO construction needs an owner-authorized sudo ticket; run `sudo -v` in the VM terminal, then rerun the same canonical build command"
-                    .to_string(),
-            ));
-        }
-        Err(error) => {
-            return Err(BuildError::Unresolved(format!(
-                "native ISO construction cannot invoke sudo: {error}"
-            )));
-        }
-    }
+    ensure_native_sudo_authorization()?;
 
     let status = ProcessCommand::new("sudo")
         .arg("-n")
@@ -333,6 +387,34 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn sudo_authorization_uses_cached_ticket_when_available() {
+        assert_eq!(
+            sudo_authorization_mode(true, false),
+            SudoAuthorizationMode::Cached
+        );
+        assert_eq!(
+            sudo_authorization_mode(true, true),
+            SudoAuthorizationMode::Cached
+        );
+    }
+
+    #[test]
+    fn sudo_authorization_refreshes_only_at_an_interactive_handoff() {
+        assert_eq!(
+            sudo_authorization_mode(false, true),
+            SudoAuthorizationMode::RefreshInteractive
+        );
+    }
+
+    #[test]
+    fn sudo_authorization_remains_fail_closed_without_terminal_or_ticket() {
+        assert_eq!(
+            sudo_authorization_mode(false, false),
+            SudoAuthorizationMode::Unresolved
+        );
+    }
 
     #[test]
     fn json_input_accepts_optional_utf8_bom_without_relaxing_shape() {

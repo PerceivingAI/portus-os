@@ -41,11 +41,10 @@ Use narrower test categories from `scripts/test.sh` while iterating, but run the
 Read `BUILD_REQUIREMENTS.md` and `BUILD_HARNESS.md` first.
 
 ```bash
-sudo -v
 bash portusos-build/build-iso.sh --config portusos-build/configs/first-live.json
 ```
 
-Do not bypass preflight, staging, package/source verification, native cleanup verification, or candidate evidence gates to make a build appear successful.
+Run the canonical build from an interactive terminal. The native handoff reuses a valid sudo ticket or lets `sudo` refresh owner authorization there; noninteractive execution without a valid ticket fails closed. Do not bypass preflight, staging, package/source verification, native cleanup verification, or candidate evidence gates to make a build appear successful.
 
 ## Engineering rules
 

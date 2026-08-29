@@ -48,9 +48,10 @@ Read these first:
 The canonical development ISO request is:
 
 ```bash
-sudo -v
 bash portusos-build/build-iso.sh --config portusos-build/configs/first-live.json
 ```
+
+Keep the canonical build attached to an interactive terminal. Privileged native construction is owner-authorized at the point it begins: a valid cached sudo ticket is reused, otherwise `sudo` prompts there directly. Noninteractive execution without a valid ticket fails closed instead of prompting. Portus never reads or records the sudo password.
 
 The build intentionally fails closed when required source, package, Artix-context, sudo, staging, or validation prerequisites are not satisfied. A successful ISO build is not by itself a release acceptance result.
 

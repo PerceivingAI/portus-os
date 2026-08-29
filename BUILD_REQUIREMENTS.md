@@ -171,11 +171,12 @@ The supported L2 isolation method is a verified Artix live-SquashFS lower layer 
 Current requirements are:
 
 - `sudo` and util-linux `unshare` must be available for the bounded privileged namespace helper;
-- the user authorizes privilege explicitly with `sudo -v`; the harness uses only `sudo -n` and must never prompt for a password;
-- the harness must never request, read, store, log, or embed the user's sudo password;
+- privilege is owner-authorized at the native handoff: the builder reuses a valid `sudo -n -v` ticket when present, or, only when attached to an interactive terminal, invokes `sudo -v` at that handoff before returning to `sudo -n` for the bounded helper;
+- Portus code must never request, read, store, echo, log, or embed the user's sudo password; the interactive refresh, when required, is owned directly by `sudo` and the terminal;
+- a noninteractive build with no valid cached sudo ticket must fail closed with unresolved exit `78` rather than attempting to prompt;
 - privilege is used only for the private namespace, mount/chroot and `artools` operation that requires it;
 - the outer build must not run the entire repository/harness as root merely for convenience;
-- lack of cached sudo authorization is not itself a configuration defect; after unprivileged staging it becomes deterministic unresolved exit `78` with owner remediation;
+- lack of cached sudo authorization is not itself a configuration defect: an interactive canonical build refreshes authorization at the native handoff, while a noninteractive build without a valid ticket returns deterministic unresolved exit `78`;
 - preflight must inspect `/proc/*/mountinfo`, not only the caller's `findmnt` view: historical references to the canonical prepared upper/work are WARN because native builds use a fresh run-scoped clone, while any surviving prior `native-runs/.../artix-context` reference or current-run context reference is BLOCK;
 - the native helper must make mount propagation private before its first native mount and must never mount the canonical prepared upper/work pair directly during `build-iso`;
 - the installed PortusOS rootfs must retain both `linux-lts` (normal/default) and `linux` (alternate), while the first live ISO boot payload uses only `linux-lts`; the `artools 0.39.1-1` compatibility shim may patch only the run-owned Artix `buildiso` copy, must verify the exact upstream single-kernel seam before patching, must pair the LTS kernel image with exactly one `pkgbase=linux-lts` module version for live initramfs generation, and must fail closed on drift or ambiguity;
