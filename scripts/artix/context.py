@@ -29,6 +29,7 @@ PACMAN_PRINT_FORMAT = "%r|%n|%v|%f|%h|%s|%a"
 PACKAGE_TARGET_RE = re.compile(r"^[A-Za-z0-9@._+:-]+$")
 FROZEN_REPOSITORIES = ("system", "world", "galaxy")
 PACKAGE_PREFETCH_BATCH_LIMIT_BYTES = 192 * 1024 * 1024
+PACKAGE_PREFETCH_MAX_MIRROR_ATTEMPTS = 4
 
 
 def utc_now() -> str:
@@ -675,6 +676,156 @@ def exact_package_sync_targets(packages: list[dict[str, Any]]) -> list[str]:
     return [f"{package['repository']}/{package['name']}" for package in packages]
 
 
+def prefetch_pacman_command(
+    config_path: str,
+    db_path: str,
+    cache_path: str,
+    packages: list[dict[str, Any]],
+) -> list[str]:
+    """Build the pacman 7.1 download-only command for already-resolved identities."""
+    if not packages:
+        raise ValueError("package prefetch command requires at least one exact package identity")
+    return [
+        "/usr/bin/pacman",
+        "-Sw",
+        "--noconfirm",
+        "--config",
+        config_path,
+        "--dbpath",
+        db_path,
+        "--cachedir",
+        cache_path,
+        "--nodeps",
+        "--nodeps",
+        *exact_package_sync_targets(packages),
+    ]
+
+
+def ordered_prefetch_mirrors(
+    candidates: list[dict[str, Any]],
+    selected_anchor: dict[str, Any],
+    max_attempts: int = PACKAGE_PREFETCH_MAX_MIRROR_ATTEMPTS,
+) -> list[dict[str, Any]]:
+    """Return the anchor first, followed by bounded distinct mirrorlist fallbacks."""
+    if max_attempts <= 0:
+        raise ValueError("package prefetch mirror-attempt limit must be positive")
+    anchor_server = selected_anchor.get("server") if isinstance(selected_anchor, dict) else None
+    if not isinstance(anchor_server, str):
+        raise RuntimeError("selected Artix repository anchor lacks a server template")
+    matching_anchor = next((candidate for candidate in candidates if candidate.get("server") == anchor_server), None)
+    if matching_anchor is None:
+        raise RuntimeError("selected Artix repository anchor is absent from parsed mirror candidates")
+    ordered = [copy.deepcopy(matching_anchor)]
+    ordered.extend(copy.deepcopy(candidate) for candidate in candidates if candidate.get("server") != anchor_server)
+    return ordered[:max_attempts]
+
+
+def remove_unverified_attempt_files(cache: Path, packages: list[dict[str, Any]]) -> list[str]:
+    """Remove corrupt complete archives and partial files before mirror failover."""
+    removed: list[str] = []
+    for package in packages:
+        cached = cache / package["filename"]
+        if cached.is_file() and sha256_file(cached) != package["sha256"]:
+            cached.unlink()
+            removed.append(cached.name)
+            signature = cache / f"{package['filename']}.sig"
+            if signature.exists():
+                signature.unlink()
+                removed.append(signature.name)
+        partial = cache / f"{package['filename']}.part"
+        if partial.exists():
+            partial.unlink()
+            removed.append(partial.name)
+        signature_partial = cache / f"{package['filename']}.sig.part"
+        if signature_partial.exists():
+            signature_partial.unlink()
+            removed.append(signature_partial.name)
+    return sorted(removed)
+
+
+def acquire_batch_with_mirror_failover(
+    cache: Path,
+    batch: list[dict[str, Any]],
+    mirrors: list[dict[str, Any]],
+    fetch_attempt: Any,
+    progress: Any | None = None,
+) -> tuple[set[str], list[dict[str, Any]]]:
+    """Acquire one frozen batch across bounded mirrors without changing repository DB state."""
+    if not mirrors:
+        raise RuntimeError("package prefetch has no eligible mirrors")
+    pending_by_filename = {package["filename"]: package for package in batch}
+    verified: set[str] = set()
+    attempts: list[dict[str, Any]] = []
+    last_error: BaseException | None = None
+    clean_retry_packages: list[dict[str, Any]] | None = None
+
+    for attempt_index, mirror in enumerate(mirrors, start=1):
+        if clean_retry_packages is not None:
+            attempt_packages = clean_retry_packages
+            clean_retry_packages = None
+        elif pending_by_filename:
+            attempt_packages = [
+                package for package in batch if package["filename"] in pending_by_filename
+            ]
+        else:
+            break
+        attempt_error: BaseException | None = None
+        try:
+            fetch_attempt(attempt_index, mirror, attempt_packages)
+        except BaseException as error:
+            attempt_error = error
+            last_error = error
+
+        verified_attempt = verified_cached_filenames(cache, attempt_packages)
+        verified.update(verified_attempt)
+        for filename in verified_attempt:
+            pending_by_filename.pop(filename, None)
+        pending_packages = [
+            package for package in batch if package["filename"] in pending_by_filename
+        ]
+        removed_unverified = remove_unverified_attempt_files(cache, pending_packages)
+        detail = None
+        if attempt_error is not None:
+            detail = concise_process_failure(attempt_error) if isinstance(attempt_error, subprocess.CalledProcessError) else str(attempt_error)[:500]
+        elif pending_by_filename:
+            detail = "attempt completed without producing SHA-256-valid files for every requested identity"
+        attempt_record = {
+            "attempt": attempt_index,
+            "mirror": copy.deepcopy(mirror),
+            "requested_count": len(attempt_packages),
+            "verified_count": len(verified_attempt),
+            "pending_count": len(pending_by_filename),
+            "removed_unverified": removed_unverified,
+            "result": "pass" if attempt_error is None and not pending_by_filename else "fail",
+            "detail": detail,
+        }
+        attempts.append(attempt_record)
+        if progress is not None:
+            progress(copy.deepcopy(attempt_record), copy.deepcopy(verified), set(pending_by_filename))
+
+        if isinstance(attempt_error, (KeyboardInterrupt, SystemExit)):
+            raise attempt_error
+        if attempt_error is None and not pending_by_filename:
+            return verified, attempts
+        if attempt_error is not None and not pending_by_filename:
+            clean_retry_packages = list(attempt_packages)
+
+    pending_names = [package["filename"] for package in batch if package["filename"] in pending_by_filename]
+    if not pending_names and last_error is not None:
+        message = (
+            f"package prefetch exhausted {len(attempts)}/{len(mirrors)} mirror attempts; all requested archives "
+            "matched the frozen SHA-256 identities but pacman never completed a clean transaction"
+        )
+    else:
+        message = (
+            f"package prefetch exhausted {len(attempts)}/{len(mirrors)} mirror attempts with "
+            f"{len(pending_names)} unresolved package files: " + ", ".join(pending_names)
+        )
+    if last_error is not None:
+        raise RuntimeError(message) from last_error
+    raise RuntimeError(message)
+
+
 def acquire_prefetch_batches(
     cache: Path,
     batches: list[list[dict[str, Any]]],
@@ -1055,6 +1206,9 @@ def prepare_repository_closure(
             package for package in packages if package["filename"] not in cache_valid_before
         ]
         prefetch_batches = plan_package_prefetch_batches(pending_packages)
+        prefetch_mirrors = ordered_prefetch_mirrors(mirror_candidates, selected_anchor)
+        prefetch_config_host = closure_host / "prefetch-pacman.conf"
+        prefetch_config_inside = f"{closure_inside}/prefetch-pacman.conf"
         prefetched_verified: set[str] = set()
         evidence["cache"].update(
             {
@@ -1064,28 +1218,48 @@ def prepare_repository_closure(
                 "prefetch_batch_count": len(prefetch_batches),
                 "prefetch_completed_batch_count": 0,
                 "prefetch_pending_count": len(pending_packages),
+                "prefetch_mirror_attempt_limit": PACKAGE_PREFETCH_MAX_MIRROR_ATTEMPTS,
+                "prefetch_mirrors": copy.deepcopy(prefetch_mirrors),
+                "prefetch_attempts": [],
             }
         )
         write_repository_closure_evidence(manifest_file, evidence)
 
-        def fetch_prefetch_batch(_batch_index: int, batch: list[dict[str, Any]]) -> None:
-            chroot(
-                repo,
-                native_config,
-                [
-                    "/usr/bin/pacman",
-                    "-Sw",
-                    "--noconfirm",
-                    "--config",
-                    anchor_config_inside,
-                    "--dbpath",
-                    closure_db_inside,
-                    "--cachedir",
-                    "/var/cache/pacman/pkg",
-                    "--nodeps",
-                    "--nodeps",
-                    *exact_package_sync_targets(batch),
-                ],
+        def fetch_prefetch_batch(batch_index: int, batch: list[dict[str, Any]]) -> None:
+            def fetch_mirror_attempt(
+                _attempt_index: int,
+                mirror: dict[str, Any],
+                attempt_packages: list[dict[str, Any]],
+            ) -> None:
+                prefetch_config = render_anchor_pacman_config(original_config, mirror["server"])
+                prefetch_config_host.write_text(prefetch_config, encoding="utf-8")
+                chroot(
+                    repo,
+                    native_config,
+                    prefetch_pacman_command(
+                        prefetch_config_inside,
+                        closure_db_inside,
+                        "/var/cache/pacman/pkg",
+                        attempt_packages,
+                    ),
+                )
+
+            def record_mirror_attempt(
+                attempt_record: dict[str, Any],
+                _verified: set[str],
+                _pending: set[str],
+            ) -> None:
+                evidence["cache"]["prefetch_attempts"].append(
+                    {"batch": batch_index, **attempt_record}
+                )
+                write_repository_closure_evidence(manifest_file, evidence)
+
+            acquire_batch_with_mirror_failover(
+                cache_host,
+                batch,
+                prefetch_mirrors,
+                fetch_mirror_attempt,
+                record_mirror_attempt,
             )
 
         def record_prefetch_progress(
@@ -1986,6 +2160,22 @@ def self_test() -> int:
     )
     assert [[entry["name"] for entry in batch] for batch in compact_batch_plan] == [["a", "b"], ["c"]]
     assert exact_package_sync_targets(compact_batch_plan[0]) == ["system/a", "system/b"]
+    prefetch_command_fixture = prefetch_pacman_command(
+        "/run/prefetch.conf",
+        "/run/pacman-db",
+        "/var/cache/pacman/pkg",
+        compact_batch_plan[0],
+    )
+    assert prefetch_command_fixture[:2] == ["/usr/bin/pacman", "-Sw"]
+    assert prefetch_command_fixture.count("--nodeps") == 2
+    assert not any(argument in {"-y", "-Sy", "-Syy", "--refresh"} for argument in prefetch_command_fixture)
+    assert prefetch_command_fixture[-2:] == ["system/a", "system/b"]
+    try:
+        prefetch_pacman_command("/run/prefetch.conf", "/run/pacman-db", "/cache", [])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("empty exact-package prefetch command must fail closed")
     try:
         plan_package_prefetch_batches(batch_fixture, max_bytes=0)
     except ValueError:
@@ -2077,6 +2267,121 @@ def self_test() -> int:
         assert failed_progress == [(False, 1, 1)]
         assert verified_cached_filenames(batch_cache, acquire_packages) == {"alpha.pkg.tar.zst"}
 
+        for path in tuple(batch_cache.iterdir()):
+            path.unlink()
+        failover_mirrors = [
+            {"server": "https://anchor.example/artix/$repo/os/$arch", "mirrorlist_line": 1},
+            {"server": "https://fallback.example/artix/$repo/os/$arch", "mirrorlist_line": 2},
+            {"server": "https://unused.example/artix/$repo/os/$arch", "mirrorlist_line": 3},
+        ]
+        failover_calls: list[tuple[int, str, list[str]]] = []
+        failover_progress: list[dict[str, Any]] = []
+
+        def failover_fixture_fetch(
+            attempt: int,
+            mirror: dict[str, Any],
+            attempt_packages: list[dict[str, Any]],
+        ) -> None:
+            names = [package["name"] for package in attempt_packages]
+            failover_calls.append((attempt, mirror["server"], names))
+            if attempt == 1:
+                (batch_cache / acquire_packages[0]["filename"]).write_bytes(alpha_bytes)
+                (batch_cache / acquire_packages[1]["filename"]).write_bytes(b"corrupt-beta")
+                (batch_cache / f"{acquire_packages[1]['filename']}.part").write_bytes(b"partial-beta")
+                raise RuntimeError("simulated anchor transfer failure")
+            assert names == ["beta"]
+            (batch_cache / acquire_packages[1]["filename"]).write_bytes(beta_bytes)
+
+        failover_verified, failover_attempts = acquire_batch_with_mirror_failover(
+            batch_cache,
+            acquire_packages,
+            failover_mirrors,
+            failover_fixture_fetch,
+            lambda record, _verified, _pending: failover_progress.append(record),
+        )
+        assert failover_verified == {"alpha.pkg.tar.zst", "beta.pkg.tar.zst"}
+        assert len(failover_attempts) == 2
+        assert [call[2] for call in failover_calls] == [["alpha", "beta"], ["beta"]]
+        assert failover_attempts[0]["result"] == "fail"
+        assert "beta.pkg.tar.zst" in failover_attempts[0]["removed_unverified"]
+        assert "beta.pkg.tar.zst.part" in failover_attempts[0]["removed_unverified"]
+        assert failover_attempts[1]["result"] == "pass"
+        assert len(failover_progress) == 2
+        verify_cached_package_files(batch_cache, acquire_packages)
+
+        for path in tuple(batch_cache.iterdir()):
+            path.unlink()
+        exhausted_calls: list[str] = []
+
+        def exhausted_fixture_fetch(
+            _attempt: int,
+            mirror: dict[str, Any],
+            _attempt_packages: list[dict[str, Any]],
+        ) -> None:
+            exhausted_calls.append(mirror["server"])
+            raise RuntimeError("simulated mirror failure")
+
+        try:
+            acquire_batch_with_mirror_failover(
+                batch_cache,
+                acquire_packages,
+                failover_mirrors[:2],
+                exhausted_fixture_fetch,
+            )
+        except RuntimeError as error:
+            assert "exhausted 2/2 mirror attempts" in str(error)
+        else:
+            raise AssertionError("exhausted package mirrors must fail closed")
+        assert exhausted_calls == [mirror["server"] for mirror in failover_mirrors[:2]]
+
+        for path in tuple(batch_cache.iterdir()):
+            path.unlink()
+
+        def nonzero_complete_fixture_fetch(
+            _attempt: int,
+            _mirror: dict[str, Any],
+            attempt_packages: list[dict[str, Any]],
+        ) -> None:
+            for package in attempt_packages:
+                payload = alpha_bytes if package["name"] == "alpha" else beta_bytes
+                (batch_cache / package["filename"]).write_bytes(payload)
+            raise RuntimeError("simulated pacman nonzero after complete bytes")
+
+        clean_retry_calls: list[list[str]] = []
+
+        def nonzero_then_clean_fixture_fetch(
+            attempt: int,
+            _mirror: dict[str, Any],
+            attempt_packages: list[dict[str, Any]],
+        ) -> None:
+            clean_retry_calls.append([package["name"] for package in attempt_packages])
+            if attempt == 1:
+                nonzero_complete_fixture_fetch(attempt, _mirror, attempt_packages)
+
+        retried_verified, retried_attempts = acquire_batch_with_mirror_failover(
+            batch_cache,
+            acquire_packages,
+            failover_mirrors[:2],
+            nonzero_then_clean_fixture_fetch,
+        )
+        assert retried_verified == {"alpha.pkg.tar.zst", "beta.pkg.tar.zst"}
+        assert clean_retry_calls == [["alpha", "beta"], ["alpha", "beta"]]
+        assert [attempt["result"] for attempt in retried_attempts] == ["fail", "pass"]
+
+        for path in tuple(batch_cache.iterdir()):
+            path.unlink()
+        try:
+            acquire_batch_with_mirror_failover(
+                batch_cache,
+                acquire_packages,
+                failover_mirrors[:1],
+                nonzero_complete_fixture_fetch,
+            )
+        except RuntimeError as error:
+            assert "pacman never completed a clean transaction" in str(error)
+        else:
+            raise AssertionError("nonzero pacman attempt must not become PASS from SHA evidence alone")
+
     mirror_fixture = (
         "# disabled\n"
         "#Server = https://disabled.example/$repo/os/$arch\n"
@@ -2090,6 +2395,31 @@ def self_test() -> int:
         {"server": "https://first.example/artix/$repo/os/$arch", "mirrorlist_line": 4},
         {"server": "https://second.example/artix/$repo/os/$arch", "mirrorlist_line": 5},
     ]
+    ordered_mirrors = ordered_prefetch_mirrors(
+        mirror_candidates,
+        mirror_candidates[1],
+        max_attempts=2,
+    )
+    assert [mirror["server"] for mirror in ordered_mirrors] == [
+        "https://second.example/artix/$repo/os/$arch",
+        "https://first.example/artix/$repo/os/$arch",
+    ]
+    try:
+        ordered_prefetch_mirrors(mirror_candidates, mirror_candidates[0], max_attempts=0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("non-positive mirror failover limit must fail closed")
+    try:
+        ordered_prefetch_mirrors(
+            mirror_candidates,
+            {"server": "https://missing.example/artix/$repo/os/$arch"},
+            max_attempts=2,
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("selected anchor absent from mirrorlist candidates must fail closed")
     selected_mirror, mirror_attempts = select_first_healthy_mirror(
         mirror_candidates,
         lambda candidate: (

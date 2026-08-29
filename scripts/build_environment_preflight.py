@@ -727,6 +727,10 @@ def build_checks(repo: Path, config: dict[str, Any], config_path: Path, config_s
         "repository-closure.json",
         '"-Syy"',
         '"-Sw"',
+        "PACKAGE_PREFETCH_BATCH_LIMIT_BYTES",
+        "PACKAGE_PREFETCH_MAX_MIRROR_ATTEMPTS",
+        "prefetch_pacman_command(",
+        "acquire_batch_with_mirror_failover(",
         'local_server = f"file://{closure_inside}/repo"',
     )
     closure_gate = all(marker in context_text for marker in closure_markers)
@@ -736,7 +740,7 @@ def build_checks(repo: Path, config: dict[str, Any], config_path: Path, config_s
         "input-availability",
         "pass" if closure_gate else "block",
         "native-run repository/package closure gate implemented" if closure_gate else "native-run repository/package closure gate missing",
-        "the native handoff refreshes repository metadata, resolves/prefetches the exact package closure, freezes buildiso onto a local-only run snapshot, and emits repository-closure.json"
+        "the native handoff anchors repository metadata, resolves the exact package closure, acquires it in bounded byte batches with bounded exact-identity mirror failover, freezes buildiso onto a local-only run snapshot, and emits repository-closure.json"
         if closure_gate
         else "native construction could pair stale pacman metadata with newer rolling Artix mirrors",
         None

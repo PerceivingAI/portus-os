@@ -334,6 +334,80 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
             or cache.get("verified_count") != len(report["packages"])
         ):
             raise ValueError("passing repository closure report did not prove a verified read-only build cache with restored outer ownership")
+        mirror_limit = cache.get("prefetch_mirror_attempt_limit")
+        prefetch_mirrors = cache.get("prefetch_mirrors")
+        prefetch_attempts = cache.get("prefetch_attempts")
+        batch_count = cache.get("prefetch_batch_count")
+        completed_batch_count = cache.get("prefetch_completed_batch_count")
+        pending_count = cache.get("prefetch_pending_count")
+        if (
+            not isinstance(mirror_limit, int)
+            or isinstance(mirror_limit, bool)
+            or mirror_limit <= 0
+            or mirror_limit > 16
+            or not isinstance(prefetch_mirrors, list)
+            or not prefetch_mirrors
+            or len(prefetch_mirrors) > mirror_limit
+            or not isinstance(prefetch_attempts, list)
+            or not isinstance(batch_count, int)
+            or isinstance(batch_count, bool)
+            or batch_count < 0
+            or completed_batch_count != batch_count
+            or pending_count != 0
+        ):
+            raise ValueError("passing repository closure report did not prove bounded complete package prefetch")
+        mirror_servers: list[str] = []
+        for mirror in prefetch_mirrors:
+            if not isinstance(mirror, dict) or not isinstance(mirror.get("server"), str) or not mirror["server"].startswith("https://"):
+                raise ValueError("passing repository closure report contains an invalid prefetch mirror")
+            mirror_servers.append(mirror["server"])
+        if mirror_servers[0] != selected_anchor["server"] or len(set(mirror_servers)) != len(mirror_servers):
+            raise ValueError("passing repository closure report did not prove anchor-first distinct package mirrors")
+        attempts_by_batch: dict[int, list[dict[str, Any]]] = {}
+        for attempt in prefetch_attempts:
+            if not isinstance(attempt, dict):
+                raise ValueError("passing repository closure report contains an invalid prefetch attempt")
+            batch = attempt.get("batch")
+            attempt_number = attempt.get("attempt")
+            mirror = attempt.get("mirror")
+            requested_count = attempt.get("requested_count")
+            verified_count = attempt.get("verified_count")
+            attempt_pending_count = attempt.get("pending_count")
+            if (
+                not isinstance(batch, int)
+                or isinstance(batch, bool)
+                or batch < 1
+                or batch > batch_count
+                or not isinstance(attempt_number, int)
+                or isinstance(attempt_number, bool)
+                or attempt_number < 1
+                or attempt_number > mirror_limit
+                or attempt_number > len(mirror_servers)
+                or not isinstance(mirror, dict)
+                or mirror.get("server") != mirror_servers[attempt_number - 1]
+                or not isinstance(requested_count, int)
+                or isinstance(requested_count, bool)
+                or requested_count < 1
+                or not isinstance(verified_count, int)
+                or isinstance(verified_count, bool)
+                or verified_count < 0
+                or verified_count > requested_count
+                or not isinstance(attempt_pending_count, int)
+                or isinstance(attempt_pending_count, bool)
+                or attempt_pending_count < 0
+                or attempt.get("result") not in {"pass", "fail"}
+                or not isinstance(attempt.get("removed_unverified"), list)
+            ):
+                raise ValueError("passing repository closure report contains malformed bounded mirror-attempt evidence")
+            attempts_by_batch.setdefault(batch, []).append(attempt)
+        for batch in range(1, batch_count + 1):
+            batch_attempts = attempts_by_batch.get(batch, [])
+            if not batch_attempts:
+                raise ValueError("passing repository closure report lacks mirror-attempt evidence for a downloaded batch")
+            if [attempt["attempt"] for attempt in batch_attempts] != list(range(1, len(batch_attempts) + 1)):
+                raise ValueError("passing repository closure report has non-contiguous mirror attempts")
+            if batch_attempts[-1].get("result") != "pass" or batch_attempts[-1].get("pending_count") != 0:
+                raise ValueError("passing repository closure report contains an unfinished prefetch batch")
     return status
 
 
@@ -697,6 +771,26 @@ def self_test() -> int:
             "cache": {
                 "path": "portusos-build/cache/artix-packages",
                 "verified_count": 1,
+                "prefetch_batch_count": 1,
+                "prefetch_completed_batch_count": 1,
+                "prefetch_pending_count": 0,
+                "prefetch_mirror_attempt_limit": 4,
+                "prefetch_mirrors": [
+                    {"server": "https://mirror.example/artix/$repo/os/$arch", "mirrorlist_line": 1}
+                ],
+                "prefetch_attempts": [
+                    {
+                        "batch": 1,
+                        "attempt": 1,
+                        "mirror": {"server": "https://mirror.example/artix/$repo/os/$arch", "mirrorlist_line": 1},
+                        "requested_count": 1,
+                        "verified_count": 1,
+                        "pending_count": 0,
+                        "removed_unverified": [],
+                        "result": "pass",
+                        "detail": None,
+                    }
+                ],
                 "read_only_for_buildiso": True,
                 "outer_owner_restored": True,
             },
@@ -713,6 +807,22 @@ def self_test() -> int:
         else:
             raise AssertionError("repository closure evidence must fail closed on an unlocked repository anchor")
         closure_fixture["repository_anchor"]["database_sync_locked"] = True
+        closure_fixture["cache"]["prefetch_attempts"][0]["mirror"]["server"] = "https://other.example/artix/$repo/os/$arch"
+        try:
+            validate_repository_closure_report(closure_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("repository closure evidence must fail closed on package-mirror sequence drift")
+        closure_fixture["cache"]["prefetch_attempts"][0]["mirror"]["server"] = "https://mirror.example/artix/$repo/os/$arch"
+        closure_fixture["cache"]["prefetch_attempts"][0]["attempt"] = 2
+        try:
+            validate_repository_closure_report(closure_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("repository closure evidence must fail closed when an attempt exceeds the mirror list")
+        closure_fixture["cache"]["prefetch_attempts"][0]["attempt"] = 1
         historical_failed_fixture = copy.deepcopy(closure_fixture)
         historical_failed_fixture.pop("repository_anchor")
         historical_failed_fixture["status"] = "fail"
