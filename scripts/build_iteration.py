@@ -38,6 +38,10 @@ STAGING_EVIDENCE_FILE = "staging-evidence.json"
 NATIVE_BUILD_RESULT_FILE = "native-build-result.json"
 NATIVE_CLEANUP_FILE = "native-cleanup.json"
 REPOSITORY_CLOSURE_FILE = "repository-closure.json"
+LOCKED_STABLE_PACMAN_CONFIG = "/usr/share/artools/pacman.conf.d/iso-x86_64.conf"
+FROZEN_REPOSITORIES = ("system", "world", "galaxy")
+LOCKED_PREFETCH_BATCH_LIMIT_BYTES = 192 * 1024 * 1024
+LOCKED_PREFETCH_MIRROR_ATTEMPTS = 4
 PACKAGE_PROGRESS_STATES = {
     "pending",
     "reused_verified",
@@ -485,6 +489,237 @@ def validate_repository_closure_failure(failure: Any, status: str) -> dict[str, 
     return copy.deepcopy(failure)
 
 
+def interrupted_build_failure(
+    repository_closure_status: str | None,
+    repository_closure_failure: dict[str, Any] | None,
+) -> tuple[str, str]:
+    """Preserve the repository-closure outer stage when SIGINT interrupted that stage."""
+    if (
+        repository_closure_status == "fail"
+        and isinstance(repository_closure_failure, dict)
+        and repository_closure_failure.get("cause") == "interrupted"
+    ):
+        return "repository-closure", format_repository_closure_failure_reason(repository_closure_failure)
+    return "native-iso-build", "interrupted"
+
+
+def validate_current_repository_closure_failure_consistency(
+    report: dict[str, Any],
+    failure: dict[str, Any],
+    progress_summary: dict[str, Any] | None,
+) -> None:
+    """Bind current A5/A6 failure evidence to the recorded package/mirror state."""
+    if progress_summary is None:
+        raise ValueError("current A6 closure failure lacks required A5 package-progress evidence")
+
+    substage = failure["substage"]
+    cause = failure["cause"]
+    context = failure["context"]
+    cause_substages = {
+        "no_eligible_mirror": {"mirror-selection"},
+        "mirror_configuration": {"mirror-selection"},
+        "repository_unavailable": {"repository-sync"},
+        "resolution_incomplete": {"resolution"},
+        "resolution_mismatch": {"local-validation"},
+        "verification_incomplete": {"acquisition"},
+    }
+    if cause in cause_substages and substage not in cause_substages[cause]:
+        raise ValueError("current A6 closure failure uses a cause incompatible with its substage")
+    if substage not in {"repository-sync", "acquisition"} and context:
+        raise ValueError("current A6 closure failure carries attempt context for a non-attempt substage")
+
+    if substage == "repository-sync":
+        anchor = report.get("repository_anchor")
+        attempts = anchor.get("attempts") if isinstance(anchor, dict) else None
+        last = attempts[-1] if isinstance(attempts, list) and attempts else None
+        terminal_failed = (
+            isinstance(anchor, dict)
+            and anchor.get("status") == "fail"
+            and isinstance(last, dict)
+            and last.get("result") == "fail"
+        )
+        if terminal_failed:
+            expected_context = {
+                "mirror": last.get("server"),
+                "mirrorlist_line": last.get("mirrorlist_line"),
+                "attempt": len(attempts),
+            }
+            if context != expected_context:
+                raise ValueError("current A6 repository-sync context disagrees with the terminal failed anchor probe")
+        elif context:
+            raise ValueError("current A6 repository-sync context points at a recovered/nonterminal mirror failure")
+
+    cache = report.get("cache")
+    attempts = cache.get("prefetch_attempts") if isinstance(cache, dict) else None
+    if attempts is None:
+        attempts = []
+    if not isinstance(attempts, list):
+        raise ValueError("current A5 closure failure contains malformed acquisition-attempt evidence")
+
+    if isinstance(cache, dict) and (attempts or "prefetch_pending_count" in cache):
+        verified_count = cache.get("verified_count")
+        pending_count = cache.get("prefetch_pending_count")
+        reused_count = cache.get("reused_count")
+        downloaded_count = cache.get("downloaded_or_recovered_count")
+        if (
+            not isinstance(verified_count, int)
+            or isinstance(verified_count, bool)
+            or verified_count != progress_summary["verified"]["packages"]
+            or not isinstance(pending_count, int)
+            or isinstance(pending_count, bool)
+            or pending_count != progress_summary["pending"]["packages"]
+            or not isinstance(reused_count, int)
+            or isinstance(reused_count, bool)
+            or reused_count < 0
+            or reused_count > verified_count
+            or not isinstance(downloaded_count, int)
+            or isinstance(downloaded_count, bool)
+            or downloaded_count != verified_count - reused_count
+        ):
+            raise ValueError("current A5 cache aggregates disagree with package-progress evidence")
+
+    packages = report.get("packages")
+    progress = report.get("package_progress")
+    if not isinstance(packages, list) or not isinstance(progress, list):
+        raise ValueError("current A5 closure failure lacks package/progress records")
+    packages_by_filename = {
+        package["filename"]: package
+        for package in packages
+        if isinstance(package, dict) and isinstance(package.get("filename"), str)
+    }
+    progress_by_filename = {
+        record["filename"]: record
+        for record in progress
+        if isinstance(record, dict) and isinstance(record.get("filename"), str)
+    }
+
+    expected_attempt_state: dict[str, dict[str, Any]] = {}
+    attempts_by_batch: dict[int, list[int]] = {}
+    for attempt_record in attempts:
+        if not isinstance(attempt_record, dict):
+            raise ValueError("current A5 closure failure contains a malformed acquisition attempt")
+        batch = attempt_record.get("batch")
+        attempt_number = attempt_record.get("attempt")
+        mirror_record = attempt_record.get("mirror")
+        mirror = mirror_record.get("server") if isinstance(mirror_record, dict) else None
+        result = attempt_record.get("result")
+        failure_class = attempt_record.get("failure_class")
+        requested = attempt_record.get("requested_filenames")
+        verified = attempt_record.get("verified_filenames")
+        pending = attempt_record.get("pending_filenames")
+        requested_count = attempt_record.get("requested_count")
+        verified_count = attempt_record.get("verified_count")
+        pending_count = attempt_record.get("pending_count")
+        requested_bytes = attempt_record.get("requested_bytes")
+        verified_bytes = attempt_record.get("verified_bytes")
+        pending_bytes = attempt_record.get("pending_bytes")
+        if (
+            not isinstance(batch, int)
+            or isinstance(batch, bool)
+            or batch < 1
+            or not isinstance(attempt_number, int)
+            or isinstance(attempt_number, bool)
+            or attempt_number < 1
+            or not isinstance(mirror, str)
+            or not mirror.startswith("https://")
+            or result not in {"pass", "fail"}
+            or not isinstance(requested, list)
+            or not requested
+            or not isinstance(verified, list)
+            or not isinstance(pending, list)
+            or not all(isinstance(filename, str) and filename in packages_by_filename for filename in requested + verified + pending)
+            or len(set(requested)) != len(requested)
+            or len(set(verified)) != len(verified)
+            or len(set(pending)) != len(pending)
+            or set(verified) & set(pending)
+            or set(verified) | set(pending) != set(requested)
+            or not isinstance(requested_count, int)
+            or isinstance(requested_count, bool)
+            or requested_count != len(requested)
+            or not isinstance(verified_count, int)
+            or isinstance(verified_count, bool)
+            or verified_count != len(verified)
+            or not isinstance(pending_count, int)
+            or isinstance(pending_count, bool)
+            or pending_count != len(pending)
+            or not isinstance(requested_bytes, int)
+            or isinstance(requested_bytes, bool)
+            or requested_bytes < 0
+            or requested_bytes != sum(packages_by_filename[filename]["size_bytes"] for filename in requested)
+            or not isinstance(verified_bytes, int)
+            or isinstance(verified_bytes, bool)
+            or verified_bytes < 0
+            or verified_bytes != sum(packages_by_filename[filename]["size_bytes"] for filename in verified)
+            or not isinstance(pending_bytes, int)
+            or isinstance(pending_bytes, bool)
+            or pending_bytes < 0
+            or pending_bytes != sum(packages_by_filename[filename]["size_bytes"] for filename in pending)
+            or (result == "pass" and (pending or failure_class is not None))
+            or (result == "fail" and failure_class not in PACKAGE_ACQUISITION_FAILURE_CLASSES)
+        ):
+            raise ValueError("current A5 closure failure contains inconsistent acquisition-attempt accounting")
+        attempts_by_batch.setdefault(batch, []).append(attempt_number)
+        for filename in verified:
+            expected_attempt_state[filename] = {
+                "state": "downloaded_verified",
+                "verified": True,
+                "needs_acquisition": False,
+                "batch": batch,
+                "attempt": attempt_number,
+                "mirror": mirror,
+                "failure_class": None,
+            }
+        for filename in pending:
+            expected_attempt_state[filename] = {
+                "state": "failed",
+                "verified": False,
+                "needs_acquisition": True,
+                "batch": batch,
+                "attempt": attempt_number,
+                "mirror": mirror,
+                "failure_class": failure_class,
+            }
+
+    for batch, attempt_numbers in attempts_by_batch.items():
+        if attempt_numbers != list(range(1, len(attempt_numbers) + 1)):
+            raise ValueError(f"current A5 closure failure has non-contiguous attempts for batch {batch}")
+    for filename, expected in expected_attempt_state.items():
+        record = progress_by_filename.get(filename)
+        if record is None or any(record.get(key) != value for key, value in expected.items()):
+            raise ValueError("current A5 package state disagrees with its latest acquisition attempt")
+
+    if substage == "acquisition":
+        last = attempts[-1] if attempts else None
+        terminal_failed = isinstance(last, dict) and last.get("result") == "fail"
+        if terminal_failed:
+            mirror_record = last.get("mirror")
+            mirror = mirror_record.get("server") if isinstance(mirror_record, dict) else None
+            expected_context = {
+                "batch": last.get("batch"),
+                "attempt": last.get("attempt"),
+                "mirror": mirror,
+            }
+            if context != expected_context:
+                raise ValueError("current A6 acquisition context disagrees with the terminal failed mirror attempt")
+            failure_class = last.get("failure_class")
+            compatible_causes = {
+                "verification_incomplete": {"verification_incomplete"},
+                "interrupted": {"interrupted"},
+                "timeout": {"timeout"},
+                "http_not_found": {"http_404"},
+                "tls": {"tls_eof", "tls_failure"},
+                "dns": {"dns"},
+                "connection": {"connection"},
+                "integrity": {"hash_mismatch", "signature_failure"},
+                "process_failed": {"process_failed"},
+                "runtime_error": {"runtime_error"},
+            }
+            if cause not in compatible_causes.get(failure_class, set()):
+                raise ValueError("current A6 acquisition cause disagrees with the terminal A5 failure class")
+        elif context:
+            raise ValueError("current A6 acquisition context points at a recovered/nonterminal mirror failure")
+
+
 def format_repository_closure_failure_reason(failure: dict[str, Any] | None) -> str:
     base = "native repository/package closure failed before buildiso could complete"
     if failure is None:
@@ -526,10 +761,36 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
     if not isinstance(report.get("repositories"), list) or not isinstance(report.get("packages"), list):
         raise ValueError("repository closure repositories/packages must be lists")
     progress_summary = validate_package_progress_evidence(report)
-    validate_repository_closure_failure(report.get("failure"), status)
+    current_failure = validate_repository_closure_failure(report.get("failure"), status)
+    if current_failure is not None:
+        validate_current_repository_closure_failure_consistency(report, current_failure, progress_summary)
     if status == "pass":
         if not report["packages"] or len(report["repositories"]) != 3:
             raise ValueError("passing repository closure report lacks frozen package/repository evidence")
+        mirrorlist = report.get("mirrorlist")
+        if (
+            not isinstance(mirrorlist, dict)
+            or mirrorlist.get("path") != "/etc/pacman.d/mirrorlist"
+            or not isinstance(mirrorlist.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", mirrorlist["sha256"]) is None
+        ):
+            raise ValueError("passing repository closure report lacks a valid Artix mirrorlist identity")
+        repository_names: list[str] = []
+        for repository in report["repositories"]:
+            if (
+                not isinstance(repository, dict)
+                or set(repository) != {"name", "database_sha256", "database_size_bytes"}
+                or repository.get("name") not in FROZEN_REPOSITORIES
+                or not isinstance(repository.get("database_sha256"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", repository["database_sha256"]) is None
+                or not isinstance(repository.get("database_size_bytes"), int)
+                or isinstance(repository.get("database_size_bytes"), bool)
+                or repository["database_size_bytes"] <= 0
+            ):
+                raise ValueError("passing repository closure report contains invalid frozen repository DB evidence")
+            repository_names.append(repository["name"])
+        if tuple(repository_names) != FROZEN_REPOSITORIES:
+            raise ValueError("passing repository closure report did not freeze system/world/galaxy in the locked order")
         if (
             progress_summary is None
             or progress_summary["resolved"]["packages"] != len(report["packages"])
@@ -544,8 +805,12 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
             "verified_package_count",
             "repository_databases_immutable",
             "local_repository_constructed",
+            "local_repository_read_only",
+            "pacman_config_read_only",
             "local_resolution_matches",
+            "post_validation_cache_verified",
             "cache_outer_owner_restored",
+            "cache_source_read_only",
             "cache_read_only",
         }
         if (
@@ -556,47 +821,118 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
             or buildiso_gate.get("verified_package_count") != len(report["packages"])
             or buildiso_gate.get("repository_databases_immutable") is not True
             or buildiso_gate.get("local_repository_constructed") is not True
+            or buildiso_gate.get("local_repository_read_only") is not True
+            or buildiso_gate.get("pacman_config_read_only") is not True
             or buildiso_gate.get("local_resolution_matches") is not True
+            or buildiso_gate.get("post_validation_cache_verified") is not True
             or buildiso_gate.get("cache_outer_owner_restored") is not True
+            or buildiso_gate.get("cache_source_read_only") is not True
             or buildiso_gate.get("cache_read_only") is not True
         ):
             raise ValueError("passing repository closure report lacks the complete A7 buildiso security gate")
         anchor = report.get("repository_anchor")
         selected_anchor = anchor.get("selected") if isinstance(anchor, dict) else None
+        anchor_attempts = anchor.get("attempts") if isinstance(anchor, dict) else None
         if (
             not isinstance(anchor, dict)
+            or set(anchor) != {
+                "status",
+                "selected",
+                "attempts",
+                "candidate_count",
+                "database_sync_locked",
+                "pacman_config_path",
+                "pacman_config_sha256",
+            }
             or anchor.get("status") != "pass"
             or anchor.get("database_sync_locked") is not True
-            or not isinstance(anchor.get("attempts"), list)
+            or not isinstance(anchor_attempts, list)
+            or not anchor_attempts
+            or not isinstance(anchor.get("candidate_count"), int)
+            or isinstance(anchor.get("candidate_count"), bool)
+            or anchor["candidate_count"] < len(anchor_attempts)
+            or not isinstance(anchor.get("pacman_config_path"), str)
+            or not anchor["pacman_config_path"].endswith("/repository-closure/anchor-pacman.conf")
+            or not isinstance(anchor.get("pacman_config_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", anchor["pacman_config_sha256"]) is None
             or not isinstance(selected_anchor, dict)
+            or set(selected_anchor) != {"server", "mirrorlist_line"}
             or not isinstance(selected_anchor.get("server"), str)
             or not selected_anchor["server"].startswith("https://")
+            or not isinstance(selected_anchor.get("mirrorlist_line"), int)
+            or isinstance(selected_anchor.get("mirrorlist_line"), bool)
+            or selected_anchor["mirrorlist_line"] < 1
         ):
             raise ValueError("passing repository closure report did not prove one locked HTTPS repository anchor")
+        for index, attempt in enumerate(anchor_attempts):
+            terminal = index == len(anchor_attempts) - 1
+            if (
+                not isinstance(attempt, dict)
+                or set(attempt) != {"server", "mirrorlist_line", "result", "detail"}
+                or not isinstance(attempt.get("server"), str)
+                or not attempt["server"].startswith("https://")
+                or not isinstance(attempt.get("mirrorlist_line"), int)
+                or isinstance(attempt.get("mirrorlist_line"), bool)
+                or attempt["mirrorlist_line"] < 1
+                or attempt.get("result") != ("pass" if terminal else "fail")
+                or (attempt.get("detail") is not None and not isinstance(attempt.get("detail"), str))
+            ):
+                raise ValueError("passing repository closure report contains invalid repository-anchor attempt evidence")
+        if (
+            anchor_attempts[-1]["server"] != selected_anchor["server"]
+            or anchor_attempts[-1]["mirrorlist_line"] != selected_anchor["mirrorlist_line"]
+        ):
+            raise ValueError("passing repository closure report selected anchor disagrees with the successful probe")
+        network_pacman = report.get("network_pacman_config")
+        if (
+            not isinstance(network_pacman, dict)
+            or set(network_pacman) != {"path", "sha256"}
+            or network_pacman.get("path") != LOCKED_STABLE_PACMAN_CONFIG
+            or not isinstance(network_pacman.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", network_pacman["sha256"]) is None
+        ):
+            raise ValueError("passing repository closure report lacks the locked stable pacman configuration identity")
         frozen = report.get("frozen_pacman_config")
         local = report.get("local_validation")
         cache = report.get("cache")
         if (
             not isinstance(frozen, dict)
+            or set(frozen) != {"path", "sha256", "server", "network_repositories_enabled", "read_only_for_buildiso"}
+            or frozen.get("path") != network_pacman["path"]
+            or not isinstance(frozen.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", frozen["sha256"]) is None
             or frozen.get("network_repositories_enabled") is not False
-            or not isinstance(frozen.get("server"), str)
-            or not frozen["server"].startswith("file://")
+            or frozen.get("read_only_for_buildiso") is not True
+            or frozen.get("server") != "file:///run/portus-build/repository-closure/repo"
         ):
-            raise ValueError("passing repository closure report did not prove a local-only file:// pacman configuration")
+            raise ValueError("passing repository closure report did not prove the locked local-only file:// pacman configuration")
         if (
             not isinstance(local, dict)
+            or set(local) != {
+                "resolved_package_count",
+                "resolution_matches",
+                "package_files_verified",
+                "repository_read_only",
+                "cache_reverified_after_local_validation",
+                "network_repositories_enabled",
+            }
+            or local.get("resolved_package_count") != len(report["packages"])
             or local.get("resolution_matches") is not True
             or local.get("package_files_verified") is not True
+            or local.get("repository_read_only") is not True
+            or local.get("cache_reverified_after_local_validation") is not True
             or local.get("network_repositories_enabled") is not False
         ):
-            raise ValueError("passing repository closure report did not prove local-only package resolution and files")
+            raise ValueError("passing repository closure report did not prove local-only resolution, immutable repository consumption and post-validation cache verification")
         if (
             not isinstance(cache, dict)
+            or cache.get("source_read_only_for_buildiso") is not True
             or cache.get("read_only_for_buildiso") is not True
             or cache.get("outer_owner_restored") is not True
             or cache.get("verified_count") != len(report["packages"])
+            or cache.get("prefetch_pending_count") != 0
         ):
-            raise ValueError("passing repository closure report did not prove a verified read-only build cache with restored outer ownership")
+            raise ValueError("passing repository closure report did not prove a verified read-only build cache/source with restored outer ownership")
         cache_audit = cache.get("audit")
         if not isinstance(cache_audit, dict) or cache_audit.get("status") != "pass":
             raise ValueError("passing repository closure report lacks a successful persistent-cache audit")
@@ -616,14 +952,35 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
             or cache.get("reused_count") != len(reused_filenames)
             or not isinstance(cache_audit.get("corrupt_entries_removed"), list)
             or not isinstance(cache_audit.get("stale_partial_entries_removed"), list)
+            or not isinstance(cache_audit.get("stale_detached_signatures_removed"), list)
         ):
             raise ValueError("passing repository closure report contains an invalid persistent-cache audit")
         package_filenames: set[str] = set()
         reused_filename_set = set(reused_filenames)
         for package in report["packages"]:
-            if not isinstance(package, dict) or not isinstance(package.get("filename"), str) or not package["filename"]:
-                raise ValueError("passing repository closure report contains a package without a filename")
-            filename = package["filename"]
+            if not isinstance(package, dict):
+                raise ValueError("passing repository closure report contains a malformed package identity")
+            filename = package.get("filename")
+            sha256 = package.get("sha256")
+            pgp_signature_sha256 = package.get("pgp_signature_sha256")
+            if (
+                not all(isinstance(package.get(key), str) and package.get(key) for key in ("repository", "name", "version", "filename"))
+                or package.get("repository") not in FROZEN_REPOSITORIES
+                or not isinstance(sha256, str)
+                or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+                or "pgp_signature_sha256" not in package
+                or (
+                    pgp_signature_sha256 is not None
+                    and (
+                        not isinstance(pgp_signature_sha256, str)
+                        or re.fullmatch(r"[0-9a-f]{64}", pgp_signature_sha256) is None
+                    )
+                )
+                or not isinstance(package.get("size_bytes"), int)
+                or isinstance(package.get("size_bytes"), bool)
+                or package["size_bytes"] < 0
+            ):
+                raise ValueError("passing repository closure package lacks frozen hash/signature identity")
             if filename in package_filenames:
                 raise ValueError("passing repository closure report contains duplicate package filenames")
             package_filenames.add(filename)
@@ -631,7 +988,26 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
                 raise ValueError("passing repository closure package cached_before state disagrees with cache audit")
         if package_filenames != reused_filename_set | set(pending_filenames):
             raise ValueError("passing repository closure cache audit does not partition the frozen package closure")
+        allowed_corrupt_entries = package_filenames | {f"{filename}.sig" for filename in package_filenames}
+        allowed_partial_entries = {
+            suffix
+            for filename in package_filenames
+            for suffix in (f"{filename}.part", f"{filename}.sig.part")
+        }
+        allowed_detached_signatures = {f"{filename}.sig" for filename in package_filenames}
+        for key, allowed_entries in (
+            ("corrupt_entries_removed", allowed_corrupt_entries),
+            ("stale_partial_entries_removed", allowed_partial_entries),
+            ("stale_detached_signatures_removed", allowed_detached_signatures),
+        ):
+            entries = cache_audit[key]
+            if (
+                not all(isinstance(entry, str) and entry in allowed_entries for entry in entries)
+                or len(set(entries)) != len(entries)
+            ):
+                raise ValueError(f"passing repository closure cache audit contains invalid {key}")
         mirror_limit = cache.get("prefetch_mirror_attempt_limit")
+        batch_limit = cache.get("prefetch_batch_limit_bytes")
         prefetch_mirrors = cache.get("prefetch_mirrors")
         prefetch_attempts = cache.get("prefetch_attempts")
         batch_count = cache.get("prefetch_batch_count")
@@ -640,8 +1016,8 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
         if (
             not isinstance(mirror_limit, int)
             or isinstance(mirror_limit, bool)
-            or mirror_limit <= 0
-            or mirror_limit > 16
+            or mirror_limit != LOCKED_PREFETCH_MIRROR_ATTEMPTS
+            or batch_limit != LOCKED_PREFETCH_BATCH_LIMIT_BYTES
             or not isinstance(prefetch_mirrors, list)
             or not prefetch_mirrors
             or len(prefetch_mirrors) > mirror_limit
@@ -654,12 +1030,62 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
         ):
             raise ValueError("passing repository closure report did not prove bounded complete package prefetch")
         mirror_servers: list[str] = []
+        mirrorlist_lines: list[int] = []
         for mirror in prefetch_mirrors:
-            if not isinstance(mirror, dict) or not isinstance(mirror.get("server"), str) or not mirror["server"].startswith("https://"):
+            if (
+                not isinstance(mirror, dict)
+                or set(mirror) != {"server", "mirrorlist_line"}
+                or not isinstance(mirror.get("server"), str)
+                or not mirror["server"].startswith("https://")
+                or not isinstance(mirror.get("mirrorlist_line"), int)
+                or isinstance(mirror.get("mirrorlist_line"), bool)
+                or mirror["mirrorlist_line"] < 1
+            ):
                 raise ValueError("passing repository closure report contains an invalid prefetch mirror")
             mirror_servers.append(mirror["server"])
-        if mirror_servers[0] != selected_anchor["server"] or len(set(mirror_servers)) != len(mirror_servers):
-            raise ValueError("passing repository closure report did not prove anchor-first distinct package mirrors")
+            mirrorlist_lines.append(mirror["mirrorlist_line"])
+        if (
+            prefetch_mirrors[0] != selected_anchor
+            or len(set(mirror_servers)) != len(mirror_servers)
+            or any(current <= previous for previous, current in zip(mirrorlist_lines, mirrorlist_lines[1:]))
+        ):
+            raise ValueError("passing repository closure report did not prove anchor-first forward-only package mirror order")
+        pending_filename_set = set(pending_filenames)
+        ordered_pending_packages = sorted(
+            (package for package in report["packages"] if package["filename"] in pending_filename_set),
+            key=lambda package: (
+                package.get("repository"),
+                package.get("name"),
+                package.get("version"),
+                package.get("filename"),
+            ),
+        )
+        expected_batches: list[list[str]] = []
+        current_batch: list[str] = []
+        current_batch_bytes = 0
+        for package in ordered_pending_packages:
+            if not all(
+                isinstance(package.get(key), str) and package.get(key)
+                for key in ("repository", "name", "version", "filename")
+            ):
+                raise ValueError("passing repository closure package identity cannot prove deterministic batching")
+            size_bytes = package.get("size_bytes")
+            if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes < 0:
+                raise ValueError("passing repository closure package size cannot prove deterministic batching")
+            if current_batch and current_batch_bytes + size_bytes > batch_limit:
+                expected_batches.append(current_batch)
+                current_batch = []
+                current_batch_bytes = 0
+            current_batch.append(package["filename"])
+            current_batch_bytes += size_bytes
+            if size_bytes > batch_limit:
+                expected_batches.append(current_batch)
+                current_batch = []
+                current_batch_bytes = 0
+        if current_batch:
+            expected_batches.append(current_batch)
+        if batch_count != len(expected_batches):
+            raise ValueError("passing repository closure report batch count disagrees with deterministic byte-bounded planning")
         attempts_by_batch: dict[int, list[dict[str, Any]]] = {}
         for attempt in prefetch_attempts:
             if not isinstance(attempt, dict):
@@ -677,6 +1103,20 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
             attempt_pending_bytes = attempt.get("pending_bytes")
             attempt_pending_filenames = attempt.get("pending_filenames")
             failure_class = attempt.get("failure_class")
+            removed_unverified = attempt.get("removed_unverified")
+            allowed_removed_entries = set()
+            if isinstance(requested_filenames, list):
+                allowed_removed_entries = {
+                    candidate
+                    for filename in requested_filenames
+                    if isinstance(filename, str)
+                    for candidate in (
+                        filename,
+                        f"{filename}.sig",
+                        f"{filename}.part",
+                        f"{filename}.sig.part",
+                    )
+                }
             if (
                 not isinstance(batch, int)
                 or isinstance(batch, bool)
@@ -688,7 +1128,7 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
                 or attempt_number > mirror_limit
                 or attempt_number > len(mirror_servers)
                 or not isinstance(mirror, dict)
-                or mirror.get("server") != mirror_servers[attempt_number - 1]
+                or mirror != prefetch_mirrors[attempt_number - 1]
                 or not isinstance(requested_count, int)
                 or isinstance(requested_count, bool)
                 or requested_count < 1
@@ -741,7 +1181,12 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
                 or attempt.get("result") not in {"pass", "fail"}
                 or (attempt.get("result") == "pass" and failure_class is not None)
                 or (attempt.get("result") == "fail" and failure_class not in PACKAGE_ACQUISITION_FAILURE_CLASSES)
-                or not isinstance(attempt.get("removed_unverified"), list)
+                or not isinstance(removed_unverified, list)
+                or not all(
+                    isinstance(entry, str) and entry in allowed_removed_entries
+                    for entry in removed_unverified
+                )
+                or len(set(removed_unverified)) != len(removed_unverified)
             ):
                 raise ValueError("passing repository closure report contains malformed bounded mirror-attempt evidence")
             attempts_by_batch.setdefault(batch, []).append(attempt)
@@ -749,6 +1194,18 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
             batch_attempts = attempts_by_batch.get(batch, [])
             if not batch_attempts:
                 raise ValueError("passing repository closure report lacks mirror-attempt evidence for a downloaded batch")
+            expected_batch = expected_batches[batch - 1]
+            expected_batch_set = set(expected_batch)
+            if batch_attempts[0].get("requested_filenames") != expected_batch:
+                raise ValueError("passing repository closure report first mirror attempt disagrees with deterministic batch membership")
+            for attempt in batch_attempts:
+                requested = attempt.get("requested_filenames", [])
+                requested_set = set(requested)
+                if (
+                    not requested_set.issubset(expected_batch_set)
+                    or [filename for filename in expected_batch if filename in requested_set] != requested
+                ):
+                    raise ValueError("passing repository closure report mirror retry escaped deterministic batch membership")
             if [attempt["attempt"] for attempt in batch_attempts] != list(range(1, len(batch_attempts) + 1)):
                 raise ValueError("passing repository closure report has non-contiguous mirror attempts")
             if batch_attempts[-1].get("result") != "pass" or batch_attempts[-1].get("pending_count") != 0:
@@ -1112,13 +1569,18 @@ def self_test() -> int:
                 "pacman_config_path": "/run/portus-build/repository-closure/anchor-pacman.conf",
                 "pacman_config_sha256": "e" * 64,
             },
-            "repositories": [{"name": name} for name in ("system", "world", "galaxy")],
+            "repositories": [
+                {"name": name, "database_sha256": digest * 64, "database_size_bytes": 1024}
+                for name, digest in (("system", "1"), ("world", "2"), ("galaxy", "3"))
+            ],
             "packages": [
                 {
                     "repository": "system",
                     "name": "base",
                     "version": "1-1",
                     "filename": "base-1-1-x86_64.pkg.tar.zst",
+                    "sha256": "f" * 64,
+                    "pgp_signature_sha256": "9" * 64,
                     "size_bytes": 100,
                     "cached_before": False,
                 }
@@ -1163,13 +1625,15 @@ def self_test() -> int:
                     "pending_filenames": ["base-1-1-x86_64.pkg.tar.zst"],
                     "corrupt_entries_removed": [],
                     "stale_partial_entries_removed": [],
+                    "stale_detached_signatures_removed": [],
                 },
                 "reused_count": 0,
                 "verified_count": 1,
                 "prefetch_batch_count": 1,
                 "prefetch_completed_batch_count": 1,
                 "prefetch_pending_count": 0,
-                "prefetch_mirror_attempt_limit": 4,
+                "prefetch_batch_limit_bytes": LOCKED_PREFETCH_BATCH_LIMIT_BYTES,
+                "prefetch_mirror_attempt_limit": LOCKED_PREFETCH_MIRROR_ATTEMPTS,
                 "prefetch_mirrors": [
                     {"server": "https://mirror.example/artix/$repo/os/$arch", "mirrorlist_line": 1}
                 ],
@@ -1193,6 +1657,7 @@ def self_test() -> int:
                         "detail": None,
                     }
                 ],
+                "source_read_only_for_buildiso": True,
                 "read_only_for_buildiso": True,
                 "outer_owner_restored": True,
             },
@@ -1202,22 +1667,106 @@ def self_test() -> int:
                 "verified_package_count": 1,
                 "repository_databases_immutable": True,
                 "local_repository_constructed": True,
+                "local_repository_read_only": True,
+                "pacman_config_read_only": True,
                 "local_resolution_matches": True,
+                "post_validation_cache_verified": True,
                 "cache_outer_owner_restored": True,
+                "cache_source_read_only": True,
                 "cache_read_only": True,
             },
             "frozen_pacman_config": {
+                "path": "/usr/share/artools/pacman.conf.d/iso-x86_64.conf",
+                "sha256": "8" * 64,
                 "server": "file:///run/portus-build/repository-closure/repo",
+                "read_only_for_buildiso": True,
                 "network_repositories_enabled": False,
             },
             "local_validation": {
+                "resolved_package_count": 1,
                 "resolution_matches": True,
                 "package_files_verified": True,
+                "repository_read_only": True,
+                "cache_reverified_after_local_validation": True,
                 "network_repositories_enabled": False,
             },
             "failure": None,
         }
         assert validate_repository_closure_report(closure_fixture, "run-1") == "pass"
+        invalid_repository_hash_fixture = copy.deepcopy(closure_fixture)
+        invalid_repository_hash_fixture["repositories"][0]["database_sha256"] = "not-a-sha256"
+        try:
+            validate_repository_closure_report(invalid_repository_hash_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing closure evidence must reject missing/invalid A1 repository DB hashes")
+        invalid_anchor_probe_fixture = copy.deepcopy(closure_fixture)
+        invalid_anchor_probe_fixture["repository_anchor"]["selected"]["server"] = "https://other.example/artix/$repo/os/$arch"
+        try:
+            validate_repository_closure_report(invalid_anchor_probe_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing closure evidence must bind the selected A1 anchor to its successful probe")
+        invalid_batch_limit_fixture = copy.deepcopy(closure_fixture)
+        invalid_batch_limit_fixture["cache"]["prefetch_batch_limit_bytes"] = 1024 * 1024 * 1024
+        try:
+            validate_repository_closure_report(invalid_batch_limit_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing closure evidence must reject an unbounded/drifted A2 package batch limit")
+        invalid_mirror_limit_fixture = copy.deepcopy(closure_fixture)
+        invalid_mirror_limit_fixture["cache"]["prefetch_mirror_attempt_limit"] = 8
+        try:
+            validate_repository_closure_report(invalid_mirror_limit_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing closure evidence must reject A3 mirror-attempt limit drift")
+        invalid_mirror_line_fixture = copy.deepcopy(closure_fixture)
+        invalid_mirror_line_fixture["cache"]["prefetch_attempts"][0]["mirror"]["mirrorlist_line"] = 2
+        try:
+            validate_repository_closure_report(invalid_mirror_line_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing closure evidence must bind A3 attempts to exact mirrorlist identities")
+        backward_mirror_fixture = copy.deepcopy(closure_fixture)
+        backward_mirror_fixture["cache"]["prefetch_mirrors"].append(
+            {"server": "https://earlier.example/artix/$repo/os/$arch", "mirrorlist_line": 1}
+        )
+        try:
+            validate_repository_closure_report(backward_mirror_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing closure evidence must reject A3 fallback order that moves backward in the mirrorlist")
+        invalid_package_hash_fixture = copy.deepcopy(closure_fixture)
+        invalid_package_hash_fixture["packages"][0]["sha256"] = "not-a-sha256"
+        try:
+            validate_repository_closure_report(invalid_package_hash_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing closure evidence must retain the frozen package SHA-256 used by A3/A4")
+        invalid_pgp_signature_fixture = copy.deepcopy(closure_fixture)
+        invalid_pgp_signature_fixture["packages"][0]["pgp_signature_sha256"] = "not-a-sha256"
+        try:
+            validate_repository_closure_report(invalid_pgp_signature_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing closure evidence must reject frozen PGP-signature identity drift")
+        invalid_removed_signature_fixture = copy.deepcopy(closure_fixture)
+        invalid_removed_signature_fixture["cache"]["audit"]["stale_detached_signatures_removed"] = ["foreign.pkg.tar.zst.sig"]
+        try:
+            validate_repository_closure_report(invalid_removed_signature_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing closure evidence must reject unrelated A4 signature-removal claims")
         invalid_buildiso_gate_fixture = copy.deepcopy(closure_fixture)
         invalid_buildiso_gate_fixture["buildiso_gate"]["cache_read_only"] = False
         try:
@@ -1226,6 +1775,62 @@ def self_test() -> int:
             pass
         else:
             raise AssertionError("passing closure evidence must reject an incomplete A7 buildiso gate")
+        invalid_local_repo_ro_fixture = copy.deepcopy(closure_fixture)
+        invalid_local_repo_ro_fixture["buildiso_gate"]["local_repository_read_only"] = False
+        try:
+            validate_repository_closure_report(invalid_local_repo_ro_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing A7 evidence must prove the local repository is read-only")
+        invalid_post_validation_fixture = copy.deepcopy(closure_fixture)
+        invalid_post_validation_fixture["local_validation"]["cache_reverified_after_local_validation"] = False
+        try:
+            validate_repository_closure_report(invalid_post_validation_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing A7 evidence must prove cache re-verification after local pacman validation")
+        invalid_cache_source_ro_fixture = copy.deepcopy(closure_fixture)
+        invalid_cache_source_ro_fixture["cache"]["source_read_only_for_buildiso"] = False
+        try:
+            validate_repository_closure_report(invalid_cache_source_ro_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing A7 evidence must prove the backing cache path is read-only")
+        invalid_pacman_config_ro_fixture = copy.deepcopy(closure_fixture)
+        invalid_pacman_config_ro_fixture["frozen_pacman_config"]["read_only_for_buildiso"] = False
+        try:
+            validate_repository_closure_report(invalid_pacman_config_ro_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing A7 evidence must prove the local-only pacman config is read-only")
+        invalid_pacman_config_path_fixture = copy.deepcopy(closure_fixture)
+        invalid_pacman_config_path_fixture["frozen_pacman_config"]["path"] = "/tmp/pacman.conf"
+        try:
+            validate_repository_closure_report(invalid_pacman_config_path_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing A7 evidence must bind the frozen pacman config to the locked stable path")
+        invalid_pacman_gate_fixture = copy.deepcopy(closure_fixture)
+        invalid_pacman_gate_fixture["buildiso_gate"]["pacman_config_read_only"] = False
+        try:
+            validate_repository_closure_report(invalid_pacman_gate_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing A7 gate must independently prove the pacman config read-only handoff")
+        invalid_local_server_fixture = copy.deepcopy(closure_fixture)
+        invalid_local_server_fixture["frozen_pacman_config"]["server"] = "file:///tmp/not-the-frozen-repository"
+        try:
+            validate_repository_closure_report(invalid_local_server_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing A7 evidence must bind pacman to the exact run-local repository path")
         current_failed_fixture = copy.deepcopy(closure_fixture)
         current_failed_fixture["status"] = "fail"
         current_failed_fixture["failure"] = {
@@ -1247,6 +1852,22 @@ def self_test() -> int:
                 "failure_class": "timeout",
             }
         )
+        current_failed_fixture["cache"]["prefetch_attempts"][0].update(
+            {
+                "verified_count": 0,
+                "verified_bytes": 0,
+                "verified_filenames": [],
+                "pending_count": 1,
+                "pending_bytes": 100,
+                "pending_filenames": ["base-1-1-x86_64.pkg.tar.zst"],
+                "result": "fail",
+                "failure_class": "timeout",
+                "detail": "Operation too slow while retrieving package payload",
+            }
+        )
+        current_failed_fixture["cache"]["verified_count"] = 0
+        current_failed_fixture["cache"]["prefetch_pending_count"] = 1
+        current_failed_fixture["cache"]["downloaded_or_recovered_count"] = 0
         current_failed_fixture["progress_summary"] = {
             "display": "1 resolved / 0 verified / 1 pending",
             "resolved": {"packages": 1, "bytes": 100},
@@ -1265,8 +1886,70 @@ def self_test() -> int:
             "native repository/package closure failed at acquisition (timeout): "
             "Operation too slow while retrieving package payload"
         )
+        missing_current_progress_fixture = copy.deepcopy(current_failed_fixture)
+        missing_current_progress_fixture.pop("package_progress")
+        missing_current_progress_fixture.pop("progress_summary")
+        try:
+            validate_repository_closure_report(missing_current_progress_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("current A6 failure must not omit A5 package-progress evidence")
+        drifted_cache_aggregate_fixture = copy.deepcopy(current_failed_fixture)
+        drifted_cache_aggregate_fixture["cache"]["verified_count"] = 1
+        try:
+            validate_repository_closure_report(drifted_cache_aggregate_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("current A5 failure must bind cache aggregates to package-progress evidence")
+        drifted_package_attempt_fixture = copy.deepcopy(current_failed_fixture)
+        drifted_package_attempt_fixture["package_progress"][0]["attempt"] = 2
+        try:
+            validate_repository_closure_report(drifted_package_attempt_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("current A5 failure must bind package state to its latest acquisition attempt")
+        drifted_a6_context_fixture = copy.deepcopy(current_failed_fixture)
+        drifted_a6_context_fixture["failure"]["context"]["mirror"] = "https://other.example/artix/$repo/os/$arch"
+        try:
+            validate_repository_closure_report(drifted_a6_context_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("current A6 acquisition context must bind to the terminal failed mirror attempt")
+        drifted_a6_cause_fixture = copy.deepcopy(current_failed_fixture)
+        drifted_a6_cause_fixture["failure"]["cause"] = "http_404"
+        try:
+            validate_repository_closure_report(drifted_a6_cause_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("current A6 acquisition cause must agree with the terminal A5 failure class")
+        interrupted_failure_fixture = copy.deepcopy(current_failed_fixture["failure"])
+        interrupted_failure_fixture.update(
+            {
+                "cause": "interrupted",
+                "detail": "terminal SIGINT interrupted repository closure acquisition",
+            }
+        )
+        interrupted_stage, interrupted_reason = interrupted_build_failure("fail", interrupted_failure_fixture)
+        assert interrupted_stage == "repository-closure"
+        assert "acquisition (interrupted)" in interrupted_reason
+        assert interrupted_build_failure("pass", None) == ("native-iso-build", "interrupted")
         invalid_a6_fixture = copy.deepcopy(current_failed_fixture)
         invalid_a6_fixture["failure"]["cause"] = "not-a-cause"
+        incompatible_a6_substage_fixture = copy.deepcopy(current_failed_fixture)
+        incompatible_a6_substage_fixture["failure"].update(
+            {"substage": "local-validation", "cause": "resolution_incomplete", "context": {}}
+        )
+        try:
+            validate_repository_closure_report(incompatible_a6_substage_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("current A6 failure must reject a cause incompatible with its substage")
         try:
             validate_repository_closure_report(invalid_a6_fixture, "run-1")
         except ValueError:
@@ -1779,8 +2462,15 @@ def main() -> int:
         exit_code = run_streamed_builder(repo, log_path, metadata, run_json, build_command, env)
     except KeyboardInterrupt:
         cleanup_path = run_dir / NATIVE_CLEANUP_FILE
+        interrupted_closure_status: str | None = None
+        interrupted_closure_failure: dict[str, Any] | None = None
         try:
-            capture_repository_closure_record(run_dir, metadata, run_json, run_id)
+            interrupted_closure_status, interrupted_closure_failure = capture_repository_closure_record(
+                run_dir,
+                metadata,
+                run_json,
+                run_id,
+            )
         except (OSError, json.JSONDecodeError, ValueError) as error:
             append_log(log_path, f"repository closure evidence invalid after interruption: {error}")
         if cleanup_path.is_file():
@@ -1792,7 +2482,18 @@ def main() -> int:
             except (OSError, json.JSONDecodeError, ValueError) as error:
                 append_log(log_path, f"native cleanup evidence invalid after interruption: {error}")
         append_log(log_path, "build interrupted by user; terminal SIGINT was allowed to reach the native tree and the top-level builder was reaped")
-        return fail_run(metadata, run_json, run_dir, "native-iso-build", "interrupted", EXIT_INTERRUPTED)
+        interrupted_stage, interrupted_reason = interrupted_build_failure(
+            interrupted_closure_status,
+            interrupted_closure_failure,
+        )
+        return fail_run(
+            metadata,
+            run_json,
+            run_dir,
+            interrupted_stage,
+            interrupted_reason,
+            EXIT_INTERRUPTED,
+        )
 
     repository_closure_status: str | None = None
     repository_closure_failure: dict[str, Any] | None = None

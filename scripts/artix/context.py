@@ -25,7 +25,8 @@ EX_UNAVAILABLE = 78
 CONFIG_PATH = Path("portusos-build/artix/bootstrap.json")
 PACKAGE_CACHE_PATH = Path("portusos-build/cache/artix-packages")
 REPOSITORY_CLOSURE_FILE = "repository-closure.json"
-PACMAN_PRINT_FORMAT = "%r|%n|%v|%f|%h|%s|%a"
+LOCKED_STABLE_PACMAN_CONFIG = "/usr/share/artools/pacman.conf.d/iso-x86_64.conf"
+PACMAN_PRINT_FORMAT = "%r|%n|%v|%f|%h|%s|%a|%g"
 PACKAGE_TARGET_RE = re.compile(r"^[A-Za-z0-9@._+:-]+$")
 FROZEN_REPOSITORIES = ("system", "world", "galaxy")
 PACKAGE_PREFETCH_BATCH_LIMIT_BYTES = 192 * 1024 * 1024
@@ -36,6 +37,18 @@ PACKAGE_PROGRESS_STATES = (
     "downloaded_verified",
     "corrupt_removed",
     "failed",
+)
+PACKAGE_ACQUISITION_FAILURE_CLASSES = (
+    "verification_incomplete",
+    "interrupted",
+    "timeout",
+    "http_not_found",
+    "tls",
+    "dns",
+    "connection",
+    "integrity",
+    "process_failed",
+    "runtime_error",
 )
 REPOSITORY_CLOSURE_SUBSTAGES = (
     "mirror-selection",
@@ -336,6 +349,34 @@ def is_mountpoint(path: Path) -> bool:
         return target == str(path)
 
 
+def mount_is_read_only(path: Path) -> bool:
+    """Return True only when path is an exact mountpoint whose active mount is read-only."""
+    if not is_mountpoint(path):
+        return False
+    result = run(["findmnt", "-n", "-o", "OPTIONS", "-T", str(path)], capture=True, check=False)
+    if result.returncode != 0 or not result.stdout.strip():
+        return False
+    options = {option.strip() for option in result.stdout.strip().split(",") if option.strip()}
+    return "ro" in options and "rw" not in options
+
+
+def bind_mount_read_only(
+    path: Path,
+    *,
+    runner: Any = run,
+    mountpoint_checker: Any = is_mountpoint,
+    read_only_checker: Any = mount_is_read_only,
+) -> None:
+    """Make one path a read-only bind mount in the current mount namespace."""
+    if not path.exists():
+        raise RuntimeError(f"cannot freeze missing path as read-only bind mount: {path}")
+    if not mountpoint_checker(path):
+        runner(["mount", "--bind", str(path), str(path)])
+    runner(["mount", "-o", "remount,bind,ro", str(path)])
+    if not mountpoint_checker(path) or not read_only_checker(path):
+        raise RuntimeError(f"path did not become a read-only bind mount: {path}")
+
+
 def ensure_dirs(p: dict[str, Path]) -> None:
     for key in ("work_root", "lower", "upper", "overlay_work", "root"):
         p[key].mkdir(parents=True, exist_ok=True)
@@ -633,9 +674,9 @@ def parse_pacman_print_rows(text: str) -> list[dict[str, Any]]:
         if not raw.strip():
             continue
         fields = raw.split("|")
-        if len(fields) != 7:
+        if len(fields) != 8:
             raise RuntimeError(f"unexpected pacman closure row: {raw!r}")
-        repository, name, version, filename, sha256, size_text, architecture = fields
+        repository, name, version, filename, sha256, size_text, architecture, pgp_signature = fields
         if repository not in FROZEN_REPOSITORIES:
             raise RuntimeError(f"package closure escaped locked repositories: {repository}/{name}")
         if not PACKAGE_TARGET_RE.fullmatch(name) or not version or not filename:
@@ -648,6 +689,15 @@ def parse_pacman_print_rows(text: str) -> list[dict[str, Any]]:
             raise RuntimeError(f"package closure size is invalid: {repository}/{name}") from error
         if size_bytes < 0:
             raise RuntimeError(f"package closure size is negative: {repository}/{name}")
+        if pgp_signature == "(null)":
+            pgp_signature = ""
+        if pgp_signature and re.fullmatch(r"[A-Za-z0-9+/=]+", pgp_signature) is None:
+            raise RuntimeError(f"package closure contains an invalid encoded PGP signature: {repository}/{name}")
+        pgp_signature_sha256 = (
+            hashlib.sha256(pgp_signature.encode("ascii")).hexdigest()
+            if pgp_signature
+            else None
+        )
         identity = (repository, name, version)
         if identity in seen:
             continue
@@ -661,6 +711,7 @@ def parse_pacman_print_rows(text: str) -> list[dict[str, Any]]:
                 "sha256": sha256,
                 "size_bytes": size_bytes,
                 "architecture": architecture,
+                "pgp_signature_sha256": pgp_signature_sha256,
             }
         )
     if not rows:
@@ -669,9 +720,16 @@ def parse_pacman_print_rows(text: str) -> list[dict[str, Any]]:
     return rows
 
 
-def closure_identity(packages: list[dict[str, Any]]) -> list[tuple[str, str, str, str, str]]:
+def closure_identity(packages: list[dict[str, Any]]) -> list[tuple[str, str, str, str, str, str | None]]:
     return [
-        (entry["repository"], entry["name"], entry["version"], entry["filename"], entry["sha256"])
+        (
+            entry["repository"],
+            entry["name"],
+            entry["version"],
+            entry["filename"],
+            entry["sha256"],
+            entry.get("pgp_signature_sha256"),
+        )
         for entry in packages
     ]
 
@@ -718,8 +776,8 @@ def require_complete_verified_package_set(
     return summary
 
 
-def freeze_repository_sync_directory(sync_dir: Path) -> None:
-    """Make the run-owned synchronized repository database set mechanically immutable."""
+def freeze_repository_sync_directory(sync_dir: Path, *, hard_mount: bool = False) -> None:
+    """Freeze repository DB state by mode bits and, in native execution, a read-only bind mount."""
     if not sync_dir.is_dir():
         raise RuntimeError("repository sync directory is missing")
     for item in sync_dir.iterdir():
@@ -740,6 +798,27 @@ def freeze_repository_sync_directory(sync_dir: Path) -> None:
             raise RuntimeError(f"repository sync symlink escapes frozen state: {item.name}") from error
         if target.is_file() and target.stat().st_mode & 0o222:
             raise RuntimeError(f"repository sync file remained writable after freeze: {item.name}")
+    if hard_mount:
+        bind_mount_read_only(sync_dir)
+
+
+def freeze_local_repository(repository: Path, *, hard_mount: bool = False) -> None:
+    """Freeze the constructed file:// repository before local validation consumes it."""
+    if not repository.is_dir():
+        raise RuntimeError("local frozen repository is missing")
+    for item in repository.iterdir():
+        if item.is_symlink():
+            continue
+        if not item.is_file():
+            raise RuntimeError(f"unexpected local repository entry: {item.name}")
+        item.chmod(0o444)
+    repository.chmod(0o555)
+    if repository.stat().st_mode & 0o222:
+        raise RuntimeError("local frozen repository directory remained writable after freeze")
+    if any(item.is_file() and not item.is_symlink() and item.stat().st_mode & 0o222 for item in repository.iterdir()):
+        raise RuntimeError("local frozen repository file remained writable after freeze")
+    if hard_mount:
+        bind_mount_read_only(repository)
 
 
 def construct_frozen_local_repository(
@@ -853,12 +932,19 @@ def ordered_prefetch_mirrors(
     anchor_server = selected_anchor.get("server") if isinstance(selected_anchor, dict) else None
     if not isinstance(anchor_server, str):
         raise RuntimeError("selected Artix repository anchor lacks a server template")
-    matching_anchor = next((candidate for candidate in candidates if candidate.get("server") == anchor_server), None)
-    if matching_anchor is None:
+    anchor_index = next(
+        (index for index, candidate in enumerate(candidates) if candidate.get("server") == anchor_server),
+        None,
+    )
+    if anchor_index is None:
         raise RuntimeError("selected Artix repository anchor is absent from parsed mirror candidates")
-    ordered = [copy.deepcopy(matching_anchor)]
-    ordered.extend(copy.deepcopy(candidate) for candidate in candidates if candidate.get("server") != anchor_server)
-    return ordered[:max_attempts]
+    matching_anchor = candidates[anchor_index]
+    if matching_anchor != selected_anchor:
+        raise RuntimeError("selected Artix repository anchor identity drifted from parsed mirrorlist evidence")
+    return [
+        copy.deepcopy(candidate)
+        for candidate in candidates[anchor_index : anchor_index + max_attempts]
+    ]
 
 
 def remove_unverified_attempt_files(cache: Path, packages: list[dict[str, Any]]) -> list[str]:
@@ -925,6 +1011,15 @@ def acquire_batch_with_mirror_failover(
             package for package in batch if package["filename"] in pending_by_filename
         ]
         removed_unverified = remove_unverified_attempt_files(cache, pending_packages)
+        if attempt_error is not None and not pending_by_filename:
+            # The archive bytes match the frozen SHA, but pacman still rejected
+            # the transaction. Discard detached signatures before requiring a
+            # clean online retry so the next pacman transaction can reacquire
+            # authoritative signature material instead of inheriting stale state.
+            removed_unverified.extend(
+                remove_detached_signatures_for_retry(cache, attempt_packages)
+            )
+            removed_unverified = sorted(set(removed_unverified))
         detail = None
         if attempt_error is not None:
             detail = concise_process_failure(attempt_error) if isinstance(attempt_error, subprocess.CalledProcessError) else str(attempt_error)[:500]
@@ -1058,12 +1153,26 @@ def remove_cache_entry(path: Path, label: str) -> bool:
     return False
 
 
+def remove_detached_signatures_for_retry(
+    cache: Path,
+    packages: list[dict[str, Any]],
+) -> list[str]:
+    """Remove detached signatures before an online clean retry can reacquire authoritative material."""
+    removed: list[str] = []
+    for package in packages:
+        signature = cache / f"{package['filename']}.sig"
+        if remove_cache_entry(signature, "package cache retry signature"):
+            removed.append(signature.name)
+    return sorted(removed)
+
+
 def audit_persistent_package_cache(cache: Path, packages: list[dict[str, Any]]) -> dict[str, Any]:
     """Reconcile the persistent package cache against one frozen package closure."""
     reused: list[str] = []
     pending: list[str] = []
     corrupt_removed: list[str] = []
     stale_partial_removed: list[str] = []
+    stale_detached_signature_removed: list[str] = []
     expected_filenames: set[str] = set()
 
     for package in sorted(packages, key=lambda entry: entry["filename"]):
@@ -1072,23 +1181,29 @@ def audit_persistent_package_cache(cache: Path, packages: list[dict[str, Any]]) 
             raise RuntimeError(f"duplicate package filename in frozen closure: {filename}")
         expected_filenames.add(filename)
         cached = cache / filename
+        signature = cache / f"{filename}.sig"
         valid = False
-        if cached.is_symlink() or cached.exists():
+        archive_present = cached.is_symlink() or cached.exists()
+        if archive_present:
             if cached.is_symlink() or not cached.is_file():
                 if remove_cache_entry(cached, "package cache archive"):
                     corrupt_removed.append(filename)
-                signature = cache / f"{filename}.sig"
-                if remove_cache_entry(signature, "package cache signature"):
-                    corrupt_removed.append(signature.name)
             elif sha256_file(cached) == package["sha256"]:
                 valid = True
                 reused.append(filename)
             else:
                 if remove_cache_entry(cached, "package cache archive"):
                     corrupt_removed.append(filename)
-                signature = cache / f"{filename}.sig"
-                if remove_cache_entry(signature, "package cache signature"):
+
+        if not valid:
+            if remove_cache_entry(signature, "stale package cache signature"):
+                if archive_present:
                     corrupt_removed.append(signature.name)
+                else:
+                    stale_detached_signature_removed.append(signature.name)
+        elif package.get("pgp_signature_sha256") is not None:
+            if remove_cache_entry(signature, "redundant package cache signature"):
+                stale_detached_signature_removed.append(signature.name)
 
         for partial_name in (f"{filename}.part", f"{filename}.sig.part"):
             partial = cache / partial_name
@@ -1112,6 +1227,7 @@ def audit_persistent_package_cache(cache: Path, packages: list[dict[str, Any]]) 
         "pending_filenames": pending,
         "corrupt_entries_removed": sorted(corrupt_removed),
         "stale_partial_entries_removed": sorted(stale_partial_removed),
+        "stale_detached_signatures_removed": sorted(stale_detached_signature_removed),
     }
 
 
@@ -1168,6 +1284,11 @@ def summarize_package_progress(progress: list[dict[str, Any]]) -> dict[str, Any]
             raise RuntimeError(f"package progress contains invalid size for {filename}")
         if not isinstance(record.get("verified"), bool) or not isinstance(record.get("needs_acquisition"), bool):
             raise RuntimeError(f"package progress contains invalid verification flags for {filename}")
+        if state in {"reused_verified", "downloaded_verified"}:
+            if record["verified"] is not True or record["needs_acquisition"] is not False:
+                raise RuntimeError(f"verified package progress has inconsistent flags for {filename}")
+        elif record["verified"] is not False or record["needs_acquisition"] is not True:
+            raise RuntimeError(f"unresolved package progress has inconsistent flags for {filename}")
         seen.add(filename)
         resolved_packages += 1
         resolved_bytes += size_bytes
@@ -1243,11 +1364,35 @@ def record_package_progress_attempt(
 ) -> None:
     """Record one mirror attempt against the package state ledger."""
     by_filename = {record["filename"]: record for record in progress}
+    requested_filenames = attempt_record.get("requested_filenames")
+    if not isinstance(requested_filenames, list) or not requested_filenames:
+        raise RuntimeError("mirror attempt lacks requested package identities")
+    requested = set(requested_filenames)
+    if len(requested) != len(requested_filenames) or not requested.issubset(by_filename):
+        raise RuntimeError("mirror attempt requested invalid or duplicate package identities")
     verified = set(attempt_record["verified_filenames"])
     pending = set(attempt_record["pending_filenames"])
-    mirror = attempt_record["mirror"].get("server")
-    attempt_number = attempt_record["attempt"]
+    if verified & pending or verified | pending != requested:
+        raise RuntimeError("mirror attempt package states do not partition the requested identities")
+    mirror_record = attempt_record.get("mirror")
+    mirror = mirror_record.get("server") if isinstance(mirror_record, dict) else None
+    attempt_number = attempt_record.get("attempt")
+    result = attempt_record.get("result")
     failure_class = attempt_record.get("failure_class")
+    if (
+        not isinstance(batch_index, int)
+        or isinstance(batch_index, bool)
+        or batch_index < 1
+        or not isinstance(attempt_number, int)
+        or isinstance(attempt_number, bool)
+        or attempt_number < 1
+        or not isinstance(mirror, str)
+        or not mirror.startswith("https://")
+        or result not in {"pass", "fail"}
+        or (result == "pass" and (pending or failure_class is not None))
+        or (result == "fail" and failure_class not in PACKAGE_ACQUISITION_FAILURE_CLASSES)
+    ):
+        raise RuntimeError("mirror attempt contains invalid progress context")
     for filename in verified:
         if filename not in by_filename:
             raise RuntimeError(f"mirror attempt verified unknown package identity: {filename}")
@@ -1267,7 +1412,7 @@ def record_package_progress_attempt(
             raise RuntimeError(f"mirror attempt left unknown package identity pending: {filename}")
         by_filename[filename].update(
             {
-                "state": "failed" if attempt_record.get("result") == "fail" else "pending",
+                "state": "failed" if result == "fail" else "pending",
                 "verified": False,
                 "needs_acquisition": True,
                 "batch": batch_index,
@@ -1288,11 +1433,12 @@ def verified_cached_filenames(cache: Path, packages: list[dict[str, Any]]) -> se
 
 
 def require_buildiso_security_boundary(evidence: dict[str, Any]) -> None:
-    """Reject buildiso unless the complete frozen/local/read-only closure proof is in memory."""
+    """Reject buildiso unless the complete frozen/local/read-only closure proof is coherent in memory."""
     packages = evidence.get("packages")
     progress = evidence.get("package_progress")
     summary = evidence.get("progress_summary")
     cache = evidence.get("cache")
+    network = evidence.get("network_pacman_config")
     frozen = evidence.get("frozen_pacman_config")
     local = evidence.get("local_validation")
     gate = evidence.get("buildiso_gate")
@@ -1300,29 +1446,63 @@ def require_buildiso_security_boundary(evidence: dict[str, Any]) -> None:
         raise RuntimeError("buildiso security boundary requires a passing repository closure")
     if not isinstance(packages, list) or not packages or not isinstance(progress, list):
         raise RuntimeError("buildiso security boundary lacks the frozen package closure")
-    if not isinstance(summary, dict) or (
-        summary.get("resolved", {}).get("packages") != len(packages)
-        or summary.get("verified", {}).get("packages") != len(packages)
-        or summary.get("pending", {}).get("packages") != 0
+    package_filenames = [package.get("filename") for package in packages if isinstance(package, dict)]
+    progress_filenames = [record.get("filename") for record in progress if isinstance(record, dict)]
+    if (
+        len(package_filenames) != len(packages)
+        or not all(isinstance(filename, str) and filename for filename in package_filenames)
+        or len(set(package_filenames)) != len(package_filenames)
+        or len(progress_filenames) != len(progress)
+        or set(progress_filenames) != set(package_filenames)
+    ):
+        raise RuntimeError("buildiso security boundary package ledger does not cover the frozen closure")
+    packages_by_filename = {package["filename"]: package for package in packages}
+    for record in progress:
+        filename = record["filename"]
+        package = packages_by_filename[filename]
+        for key in ("repository", "name", "version", "filename", "size_bytes"):
+            if record.get(key) != package.get(key):
+                raise RuntimeError("buildiso security boundary package progress identity drifted from the frozen closure")
+    recomputed_summary = summarize_package_progress(progress)
+    if not isinstance(summary, dict) or summary != recomputed_summary or (
+        recomputed_summary["resolved"]["packages"] != len(packages)
+        or recomputed_summary["verified"]["packages"] != len(packages)
+        or recomputed_summary["pending"]["packages"] != 0
     ):
         raise RuntimeError("buildiso security boundary has unresolved frozen packages")
+    if any(record.get("state") not in {"reused_verified", "downloaded_verified"} for record in progress):
+        raise RuntimeError("buildiso security boundary contains a non-verified package state")
     if not isinstance(cache, dict) or (
         cache.get("verified_count") != len(packages)
         or cache.get("prefetch_pending_count") != 0
         or cache.get("outer_owner_restored") is not True
+        or cache.get("source_read_only_for_buildiso") is not True
         or cache.get("read_only_for_buildiso") is not True
     ):
         raise RuntimeError("buildiso security boundary lacks a complete verified read-only cache handoff")
     if (
-        not isinstance(frozen, dict)
-        or frozen.get("network_repositories_enabled") is not False
-        or not isinstance(frozen.get("server"), str)
-        or not frozen["server"].startswith("file://")
+        not isinstance(network, dict)
+        or network.get("path") != LOCKED_STABLE_PACMAN_CONFIG
+        or not isinstance(network.get("sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", network["sha256"]) is None
     ):
-        raise RuntimeError("buildiso security boundary did not freeze pacman onto the local file repository")
+        raise RuntimeError("buildiso security boundary lacks the locked stable pacman configuration identity")
+    if (
+        not isinstance(frozen, dict)
+        or frozen.get("path") != network["path"]
+        or frozen.get("read_only_for_buildiso") is not True
+        or frozen.get("network_repositories_enabled") is not False
+        or frozen.get("server") != "file:///run/portus-build/repository-closure/repo"
+        or not isinstance(frozen.get("sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", frozen["sha256"]) is None
+    ):
+        raise RuntimeError("buildiso security boundary did not freeze pacman onto the locked local file repository")
     if not isinstance(local, dict) or (
-        local.get("resolution_matches") is not True
+        local.get("resolved_package_count") != len(packages)
+        or local.get("resolution_matches") is not True
         or local.get("package_files_verified") is not True
+        or local.get("repository_read_only") is not True
+        or local.get("cache_reverified_after_local_validation") is not True
         or local.get("network_repositories_enabled") is not False
     ):
         raise RuntimeError("buildiso security boundary lacks successful independent local validation")
@@ -1332,20 +1512,116 @@ def require_buildiso_security_boundary(evidence: dict[str, Any]) -> None:
         or gate.get("verified_package_count") != len(packages)
         or gate.get("repository_databases_immutable") is not True
         or gate.get("local_repository_constructed") is not True
+        or gate.get("local_repository_read_only") is not True
+        or gate.get("pacman_config_read_only") is not True
         or gate.get("local_resolution_matches") is not True
+        or gate.get("post_validation_cache_verified") is not True
         or gate.get("cache_outer_owner_restored") is not True
+        or gate.get("cache_source_read_only") is not True
         or gate.get("cache_read_only") is not True
     ):
         raise RuntimeError("buildiso security-boundary evidence is incomplete")
+
+
+def require_live_buildiso_security_boundary(
+    evidence: dict[str, Any],
+    runtime_paths: dict[str, Path],
+    *,
+    read_only_mount_checker: Any = mount_is_read_only,
+) -> None:
+    """Recheck the live A7 filesystem/mount state immediately before buildiso exec."""
+    require_buildiso_security_boundary(evidence)
+    required_paths = {
+        "repository_sync_source",
+        "repository_sync_target",
+        "database_snapshot",
+        "local_repository_source",
+        "local_repository_target",
+        "pacman_config",
+        "cache_source",
+        "cache_target",
+    }
+    if set(runtime_paths) != required_paths or not all(isinstance(runtime_paths[key], Path) for key in required_paths):
+        raise RuntimeError("buildiso live security boundary paths are incomplete")
+    for key in required_paths:
+        path = runtime_paths[key]
+        if not path.exists() or not read_only_mount_checker(path):
+            raise RuntimeError(f"buildiso live security boundary path is not a read-only mount: {key}")
+
+    pacman_config = runtime_paths["pacman_config"]
+    frozen = evidence["frozen_pacman_config"]
+    if not pacman_config.is_file() or pacman_config.is_symlink() or sha256_file(pacman_config) != frozen["sha256"]:
+        raise RuntimeError("buildiso live pacman configuration drifted after local validation")
+    packages = evidence["packages"]
+    progress = evidence["package_progress"]
+    live_summary = require_complete_verified_package_set(runtime_paths["cache_source"], packages, progress)
+    target_summary = require_complete_verified_package_set(runtime_paths["cache_target"], packages, progress)
+    if live_summary != evidence["progress_summary"] or target_summary != live_summary:
+        raise RuntimeError("buildiso live cache verification disagrees across source/consumer/frozen progress evidence")
+
+    repository_records = evidence.get("repositories")
+    if not isinstance(repository_records, list) or len(repository_records) != len(FROZEN_REPOSITORIES):
+        raise RuntimeError("buildiso live security boundary lacks repository DB identities")
+    records_by_name = {
+        record.get("name"): record
+        for record in repository_records
+        if isinstance(record, dict) and isinstance(record.get("name"), str)
+    }
+    database_roots = {
+        "repository_sync_source": runtime_paths["repository_sync_source"],
+        "repository_sync_target": runtime_paths["repository_sync_target"],
+        "database_snapshot": runtime_paths["database_snapshot"],
+        "local_repository_source": runtime_paths["local_repository_source"],
+        "local_repository_target": runtime_paths["local_repository_target"],
+    }
+    for name in FROZEN_REPOSITORIES:
+        record = records_by_name.get(name)
+        if not isinstance(record, dict) or not isinstance(record.get("database_sha256"), str):
+            raise RuntimeError(f"buildiso live security boundary lacks frozen DB identity: {name}")
+        expected_sha256 = record["database_sha256"]
+        for key, root in database_roots.items():
+            database = root / f"{name}.db"
+            if not database.is_file() or sha256_file(database) != expected_sha256:
+                raise RuntimeError(f"buildiso live repository DB drifted after validation: {key}/{name}.db")
+            if key in {"database_snapshot", "local_repository_source", "local_repository_target"} and database.is_symlink():
+                raise RuntimeError(f"buildiso live copied repository DB unexpectedly became a symlink: {key}/{name}.db")
+
+    allowed_entries = {f"{name}.db" for name in FROZEN_REPOSITORIES}
+    for package in packages:
+        allowed_entries.add(package["filename"])
+    for key in ("local_repository_source", "local_repository_target"):
+        local_repository = runtime_paths[key]
+        local_allowed_entries = set(allowed_entries)
+        for package in packages:
+            filename = package["filename"]
+            package_link = local_repository / filename
+            expected_target = Path("/var/cache/pacman/pkg") / filename
+            if not package_link.is_symlink() or package_link.readlink() != expected_target:
+                raise RuntimeError(f"buildiso live package repository link drifted after validation: {key}/{filename}")
+            signature_link = local_repository / f"{filename}.sig"
+            if signature_link.exists() or signature_link.is_symlink():
+                local_allowed_entries.add(signature_link.name)
+                if not signature_link.is_symlink() or signature_link.readlink() != Path("/var/cache/pacman/pkg") / signature_link.name:
+                    raise RuntimeError(f"buildiso live package signature link drifted after validation: {key}/{signature_link.name}")
+        unexpected = sorted(item.name for item in local_repository.iterdir() if item.name not in local_allowed_entries)
+        if unexpected:
+            raise RuntimeError(f"buildiso live local repository contains unexpected entries at {key}: " + ", ".join(unexpected))
 
 
 def run_buildiso_after_security_boundary(
     evidence: dict[str, Any],
     command: list[str],
     runner: Any = run_unattended,
+    *,
+    runtime_paths: dict[str, Path],
+    read_only_mount_checker: Any = mount_is_read_only,
 ) -> subprocess.CompletedProcess[str] | Any:
-    """Make the A7 security gate inseparable from buildiso process launch."""
-    require_buildiso_security_boundary(evidence)
+    """Make the live A7 security gate inseparable from buildiso process launch."""
+    require_live_buildiso_security_boundary(
+        evidence,
+        runtime_paths,
+        read_only_mount_checker=read_only_mount_checker,
+    )
     return runner(command)
 
 
@@ -1416,7 +1692,7 @@ def classify_package_acquisition_failure(
     ).lower()
     if "operation too slow" in text or "timed out" in text or "timeout" in text:
         return "timeout"
-    if "404" in text or "not found" in text:
+    if "404" in text or "http_not_found" in text:
         return "http_not_found"
     if "tls" in text or "ssl" in text or "unexpected eof" in text or "certificate" in text:
         return "tls"
@@ -1459,9 +1735,8 @@ def repository_closure_failure_observation(
     source_failure_class: str | None = None
     if substage == "acquisition":
         attempts = evidence.get("cache", {}).get("prefetch_attempts", [])
-        failed = [attempt for attempt in attempts if isinstance(attempt, dict) and attempt.get("result") == "fail"]
-        if failed:
-            last = failed[-1]
+        last = attempts[-1] if isinstance(attempts, list) and attempts else None
+        if isinstance(last, dict) and last.get("result") == "fail":
             context = {
                 "batch": last.get("batch"),
                 "attempt": last.get("attempt"),
@@ -1470,14 +1745,14 @@ def repository_closure_failure_observation(
             detail = last.get("detail") if isinstance(last.get("detail"), str) else None
             source_failure_class = last.get("failure_class") if isinstance(last.get("failure_class"), str) else None
     elif substage == "repository-sync":
-        attempts = evidence.get("repository_anchor", {}).get("attempts", [])
-        failed = [attempt for attempt in attempts if isinstance(attempt, dict) and attempt.get("result") == "fail"]
-        if failed:
-            last = failed[-1]
+        anchor = evidence.get("repository_anchor", {})
+        attempts = anchor.get("attempts", []) if isinstance(anchor, dict) else []
+        last = attempts[-1] if isinstance(attempts, list) and attempts else None
+        if anchor.get("status") == "fail" and isinstance(last, dict) and last.get("result") == "fail":
             context = {
                 "mirror": last.get("server"),
                 "mirrorlist_line": last.get("mirrorlist_line"),
-                "attempt": len(failed),
+                "attempt": len(attempts),
             }
             detail = last.get("detail") if isinstance(last.get("detail"), str) else None
     context = {key: value for key, value in context.items() if value is not None}
@@ -1646,6 +1921,7 @@ def prepare_repository_closure(
     run(["mount", "--make-private", str(cache_target)])
     outer_cache_uid = repo.stat().st_uid
     outer_cache_gid = repo.stat().st_gid
+    cache_outer_owner_restored = False
     chroot(repo, native_config, ["/usr/bin/chown", "-R", "alpm:alpm", "/var/cache/pacman/pkg"])
     chroot(repo, native_config, ["/usr/bin/chmod", "0755", "/var/cache/pacman/pkg"])
 
@@ -1661,6 +1937,7 @@ def prepare_repository_closure(
         directory.mkdir(parents=True, exist_ok=True)
 
     closure_inside = "/run/portus-build/repository-closure"
+    closure_consumer_host = p["root"] / closure_inside.lstrip("/")
     closure_db_inside = f"{closure_inside}/pacman-db"
     validation_db_inside = f"{closure_inside}/validation-db"
     local_server = f"file://{closure_inside}/repo"
@@ -1702,7 +1979,9 @@ def prepare_repository_closure(
             "downloaded_or_recovered_count": 0,
             "corrupt_entries_removed": [],
             "stale_partial_entries_removed": [],
+            "stale_detached_signatures_removed": [],
             "verified_count": 0,
+            "source_read_only_for_buildiso": False,
             "read_only_for_buildiso": False,
             "outer_owner_restored": False,
         },
@@ -1712,8 +1991,12 @@ def prepare_repository_closure(
             "verified_package_count": 0,
             "repository_databases_immutable": False,
             "local_repository_constructed": False,
+            "local_repository_read_only": False,
+            "pacman_config_read_only": False,
             "local_resolution_matches": False,
+            "post_validation_cache_verified": False,
             "cache_outer_owner_restored": False,
+            "cache_source_read_only": False,
             "cache_read_only": False,
         },
         "frozen_pacman_config": None,
@@ -1797,8 +2080,9 @@ def prepare_repository_closure(
                 }
             )
         evidence["repositories"] = repository_records
-        freeze_repository_sync_directory(sync_dir)
-        freeze_repository_sync_directory(database_snapshot)
+        freeze_repository_sync_directory(sync_dir, hard_mount=True)
+        freeze_repository_sync_directory(database_snapshot, hard_mount=True)
+        bind_mount_read_only(closure_consumer_host / "pacman-db/sync")
         evidence["repository_anchor"]["database_sync_locked"] = True
         evidence["buildiso_gate"]["repository_databases_immutable"] = True
         evidence["repository_anchor"]["status"] = "pass"
@@ -1847,7 +2131,10 @@ def prepare_repository_closure(
                 "audit": copy.deepcopy(cache_audit),
                 "reused_count": reused_count,
                 "corrupt_entries_removed": copy.deepcopy(cache_audit["corrupt_entries_removed"]),
+                "downloaded_or_recovered_count": 0,
+                "verified_count": reused_count,
                 "stale_partial_entries_removed": copy.deepcopy(cache_audit["stale_partial_entries_removed"]),
+                "stale_detached_signatures_removed": copy.deepcopy(cache_audit["stale_detached_signatures_removed"]),
                 "prefetch_batch_limit_bytes": PACKAGE_PREFETCH_BATCH_LIMIT_BYTES,
                 "prefetch_batch_count": len(prefetch_batches),
                 "prefetch_completed_batch_count": 0,
@@ -1894,6 +2181,11 @@ def prepare_repository_closure(
                     attempt_record,
                 )
                 evidence["progress_summary"] = summarize_package_progress(evidence["package_progress"])
+                evidence["cache"]["verified_count"] = evidence["progress_summary"]["verified"]["packages"]
+                evidence["cache"]["prefetch_pending_count"] = evidence["progress_summary"]["pending"]["packages"]
+                evidence["cache"]["downloaded_or_recovered_count"] = (
+                    evidence["progress_summary"]["verified"]["packages"] - reused_count
+                )
                 write_repository_closure_evidence(manifest_file, evidence)
 
             acquire_batch_with_mirror_failover(
@@ -1937,11 +2229,14 @@ def prepare_repository_closure(
             evidence["package_progress"],
         )
         evidence["progress_summary"] = complete_summary
+        freeze_local_repository(frozen_repo, hard_mount=True)
+        bind_mount_read_only(closure_consumer_host / "repo")
         evidence["buildiso_gate"].update(
             {
                 "all_packages_verified": True,
                 "verified_package_count": len(packages),
                 "local_repository_constructed": True,
+                "local_repository_read_only": True,
             }
         )
         for package in packages:
@@ -1953,8 +2248,10 @@ def prepare_repository_closure(
                 "downloaded_or_recovered_count": len(packages) - reused_count,
                 "corrupt_entries_removed": copy.deepcopy(cache_audit["corrupt_entries_removed"]),
                 "stale_partial_entries_removed": copy.deepcopy(cache_audit["stale_partial_entries_removed"]),
+                "stale_detached_signatures_removed": copy.deepcopy(cache_audit["stale_detached_signatures_removed"]),
                 "verified_count": len(packages),
                 "prefetch_pending_count": 0,
+                "source_read_only_for_buildiso": False,
                 "read_only_for_buildiso": False,
                 "outer_owner_restored": False,
             }
@@ -1962,12 +2259,15 @@ def prepare_repository_closure(
 
         frozen_config = render_frozen_pacman_config(original_config, local_server)
         pacman_config_host.write_text(frozen_config, encoding="utf-8")
+        bind_mount_read_only(pacman_config_host)
         evidence["frozen_pacman_config"] = {
             "path": pacman_config,
             "sha256": hashlib.sha256(frozen_config.encode("utf-8")).hexdigest(),
             "server": local_server,
             "network_repositories_enabled": False,
+            "read_only_for_buildiso": True,
         }
+        evidence["buildiso_gate"]["pacman_config_read_only"] = True
 
         current_substage = "local-validation"
         chroot(
@@ -2022,18 +2322,31 @@ def prepare_repository_closure(
                 *targets,
             ],
         )
+        post_validation_summary = require_complete_verified_package_set(
+            cache_host,
+            packages,
+            evidence["package_progress"],
+        )
+        evidence["progress_summary"] = post_validation_summary
         evidence["local_validation"] = {
             "resolved_package_count": len(validation_packages),
             "resolution_matches": True,
             "package_files_verified": True,
+            "repository_read_only": True,
+            "cache_reverified_after_local_validation": True,
             "network_repositories_enabled": False,
         }
         evidence["buildiso_gate"]["local_resolution_matches"] = True
+        evidence["buildiso_gate"]["post_validation_cache_verified"] = True
         current_substage = "cache-verification"
         run(["chown", "-R", f"{outer_cache_uid}:{outer_cache_gid}", str(cache_host)])
+        cache_outer_owner_restored = True
         evidence["cache"]["outer_owner_restored"] = True
         evidence["buildiso_gate"]["cache_outer_owner_restored"] = True
-        run(["mount", "-o", "remount,bind,ro", str(cache_target)])
+        bind_mount_read_only(cache_host)
+        evidence["cache"]["source_read_only_for_buildiso"] = True
+        evidence["buildiso_gate"]["cache_source_read_only"] = True
+        bind_mount_read_only(cache_target)
         evidence["cache"]["read_only_for_buildiso"] = True
         evidence["buildiso_gate"]["cache_read_only"] = True
         evidence["buildiso_gate"]["status"] = "pass"
@@ -2052,10 +2365,11 @@ def prepare_repository_closure(
         # private namespace.  Artix's DownloadUser owns it only while prefetching.
         # Restore ownership even on closure failure so recovery never requires
         # retaining an alpm-owned generated tree on the outer build host.
-        try:
-            run(["chown", "-R", f"{outer_cache_uid}:{outer_cache_gid}", str(cache_host)])
-        except Exception as ownership_error:
-            print(f"warning: failed to restore Artix package-cache ownership: {ownership_error}", file=sys.stderr)
+        if not cache_outer_owner_restored:
+            try:
+                run(["chown", "-R", f"{outer_cache_uid}:{outer_cache_gid}", str(cache_host)])
+            except Exception as ownership_error:
+                print(f"warning: failed to restore Artix package-cache ownership: {ownership_error}", file=sys.stderr)
 
 
 def parse_pacman_desc(text: str) -> dict[str, str]:
@@ -2555,7 +2869,20 @@ def build_iso_inner(repo: Path, config: dict[str, Any], manifest_file: Path) -> 
         "-t",
         "/run/portus-build/iso-out",
     ]
-    run_buildiso_after_security_boundary(repository_closure, command)
+    run_buildiso_after_security_boundary(
+        repository_closure,
+        command,
+        runtime_paths={
+            "repository_sync_source": resolved["native_root"] / "repository-closure/pacman-db/sync",
+            "repository_sync_target": p["root"] / "run/portus-build/repository-closure/pacman-db/sync",
+            "database_snapshot": resolved["native_root"] / "repository-closure/repository-dbs",
+            "local_repository_source": resolved["native_root"] / "repository-closure/repo",
+            "local_repository_target": p["root"] / "run/portus-build/repository-closure/repo",
+            "pacman_config": p["root"] / LOCKED_STABLE_PACMAN_CONFIG.lstrip("/"),
+            "cache_source": repo / PACKAGE_CACHE_PATH,
+            "cache_target": p["root"] / "var/cache/pacman/pkg",
+        },
+    )
     artifacts = sorted(path for path in resolved["iso_out"].rglob("*.iso") if path.is_file())
     if len(artifacts) != 1:
         raise RuntimeError(f"native artools build must produce exactly one ISO; found {len(artifacts)}")
@@ -2708,11 +3035,19 @@ def self_test() -> int:
     )
     assert package_targets == ["base", "calamares", "grub", "linux-lts", "memtest86+"]
     closure_rows = parse_pacman_print_rows(
-        "system|base|3-6.5|base-3-6.5-any.pkg.tar.zst|" + "a" * 64 + "|1024|any\n"
-        "world|calamares|3.4.2-4|calamares-3.4.2-4-x86_64.pkg.tar.zst|" + "b" * 64 + "|2048|x86_64\n"
+        "system|base|3-6.5|base-3-6.5-any.pkg.tar.zst|" + "a" * 64 + "|1024|any|QUJDRA==\n"
+        "world|calamares|3.4.2-4|calamares-3.4.2-4-x86_64.pkg.tar.zst|" + "b" * 64 + "|2048|x86_64|\n"
     )
     assert [row["name"] for row in closure_rows] == ["base", "calamares"]
     require_same_package_closure(closure_rows, copy.deepcopy(closure_rows))
+    signature_drift_rows = copy.deepcopy(closure_rows)
+    signature_drift_rows[0]["pgp_signature_sha256"] = "0" * 64
+    try:
+        require_same_package_closure(closure_rows, signature_drift_rows)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("repository PGP-signature identity drift must fail local closure validation")
     with tempfile.TemporaryDirectory(prefix="portus-artix-evidence-self-test-") as raw_evidence:
         evidence_root = Path(raw_evidence)
         manifest_file = evidence_root / "staging-evidence.json"
@@ -2730,7 +3065,7 @@ def self_test() -> int:
         write_repository_closure_evidence(manifest_file, frozen_evidence)
         persisted = json.loads(repository_closure_evidence_path(manifest_file).read_text(encoding="utf-8"))
         assert [row["name"] for row in persisted["packages"]] == ["base", "calamares"]
-        required_identity_fields = {"repository", "name", "version", "filename", "sha256", "size_bytes"}
+        required_identity_fields = {"repository", "name", "version", "filename", "sha256", "size_bytes", "pgp_signature_sha256"}
         assert all(required_identity_fields.issubset(row) for row in persisted["packages"])
         assert persisted["packages"][0]["size_bytes"] == 1024
         assert persisted["failure"] == "simulated post-resolution acquisition failure"
@@ -2782,6 +3117,7 @@ def self_test() -> int:
                 "filename": "reused-1-1-any.pkg.tar.zst",
                 "sha256": hashlib.sha256(reused_bytes).hexdigest(),
                 "size_bytes": len(reused_bytes),
+                "pgp_signature_sha256": "1" * 64,
             },
             {
                 "repository": "world",
@@ -2790,6 +3126,7 @@ def self_test() -> int:
                 "filename": "corrupt-1-1-any.pkg.tar.zst",
                 "sha256": hashlib.sha256(corrupt_bytes).hexdigest(),
                 "size_bytes": len(corrupt_bytes),
+                "pgp_signature_sha256": "2" * 64,
             },
             {
                 "repository": "galaxy",
@@ -2798,11 +3135,14 @@ def self_test() -> int:
                 "filename": "missing-1-1-any.pkg.tar.zst",
                 "sha256": hashlib.sha256(missing_bytes).hexdigest(),
                 "size_bytes": len(missing_bytes),
+                "pgp_signature_sha256": "3" * 64,
             },
         ]
         (cache_audit_root / audit_packages[0]["filename"]).write_bytes(reused_bytes)
+        (cache_audit_root / f"{audit_packages[0]['filename']}.sig").write_bytes(b"stale-reused-signature")
         (cache_audit_root / audit_packages[1]["filename"]).write_bytes(b"wrong-bytes")
         (cache_audit_root / f"{audit_packages[1]['filename']}.sig").write_bytes(b"stale-signature")
+        (cache_audit_root / f"{audit_packages[2]['filename']}.sig").write_bytes(b"orphan-signature")
         (cache_audit_root / f"{audit_packages[2]['filename']}.part").write_bytes(b"stale-partial")
         (cache_audit_root / f"{audit_packages[2]['filename']}.sig.part").write_bytes(b"stale-signature-partial")
         cache_audit = audit_persistent_package_cache(cache_audit_root, audit_packages)
@@ -2819,11 +3159,19 @@ def self_test() -> int:
             audit_packages[1]["filename"],
             f"{audit_packages[1]['filename']}.sig",
         ]
+        assert cache_audit["stale_detached_signatures_removed"] == sorted(
+            [
+                f"{audit_packages[0]['filename']}.sig",
+                f"{audit_packages[2]['filename']}.sig",
+            ]
+        )
         assert cache_audit["stale_partial_entries_removed"] == [
             f"{audit_packages[2]['filename']}.part",
             f"{audit_packages[2]['filename']}.sig.part",
         ]
         assert (cache_audit_root / audit_packages[0]["filename"]).is_file()
+        assert not (cache_audit_root / f"{audit_packages[0]['filename']}.sig").exists()
+        assert not (cache_audit_root / f"{audit_packages[2]['filename']}.sig").exists()
         assert not (cache_audit_root / audit_packages[1]["filename"]).exists()
         assert not (cache_audit_root / f"{audit_packages[1]['filename']}.sig").exists()
         assert not (cache_audit_root / f"{audit_packages[2]['filename']}.part").exists()
@@ -2842,6 +3190,7 @@ def self_test() -> int:
         simulated_attempt = {
             "attempt": 1,
             "mirror": {"server": "https://mirror.example/artix/$repo/os/$arch", "mirrorlist_line": 1},
+            "requested_filenames": [audit_packages[1]["filename"], audit_packages[2]["filename"]],
             "verified_filenames": [audit_packages[1]["filename"]],
             "pending_filenames": [audit_packages[2]["filename"]],
             "result": "fail",
@@ -2947,10 +3296,17 @@ def self_test() -> int:
     assert classify_package_acquisition_failure(tls_error, {"a"}, concise_process_failure(tls_error)) == "tls"
     not_found_error = subprocess.CalledProcessError(1, ["pacman"], stderr="failed retrieving file: 404 Not Found")
     assert classify_package_acquisition_failure(not_found_error, {"a"}, concise_process_failure(not_found_error)) == "http_not_found"
+    target_missing_error = subprocess.CalledProcessError(1, ["pacman"], stderr="error: target not found: system/base")
+    assert classify_package_acquisition_failure(
+        target_missing_error,
+        {"a"},
+        concise_process_failure(target_missing_error),
+    ) == "process_failed"
     assert classify_package_acquisition_failure(None, {"a"}, None) == "verification_incomplete"
     assert classify_package_acquisition_failure(None, set(), None) is None
     sync_evidence = {
         "repository_anchor": {
+            "status": "fail",
             "attempts": [
                 {
                     "server": "https://mirror.example/artix/$repo/os/$arch",
@@ -2970,6 +3326,28 @@ def self_test() -> int:
     assert sync_failure["substage"] == "repository-sync"
     assert sync_failure["cause"] == "tls_eof"
     assert sync_failure["context"]["mirror"].startswith("https://mirror.example/")
+    recovered_sync_evidence = copy.deepcopy(sync_evidence)
+    recovered_sync_evidence["repository_anchor"].update(
+        {
+            "status": "selected",
+            "selected": {"server": "https://healthy.example/artix/$repo/os/$arch", "mirrorlist_line": 8},
+        }
+    )
+    recovered_sync_evidence["repository_anchor"]["attempts"].append(
+        {
+            "server": "https://healthy.example/artix/$repo/os/$arch",
+            "mirrorlist_line": 8,
+            "result": "pass",
+            "detail": None,
+        }
+    )
+    recovered_sync_failure = classify_repository_closure_failure(
+        "repository-sync",
+        RuntimeError("failed to copy synchronized repository database"),
+        recovered_sync_evidence,
+    )
+    assert recovered_sync_failure["cause"] == "runtime_error"
+    assert recovered_sync_failure["context"] == {}
     acquisition_evidence = {
         "repository_anchor": {"attempts": []},
         "cache": {
@@ -2996,6 +3374,24 @@ def self_test() -> int:
         "attempt": 2,
         "mirror": "https://fallback.example/artix/$repo/os/$arch",
     }
+    recovered_acquisition_evidence = copy.deepcopy(acquisition_evidence)
+    recovered_acquisition_evidence["cache"]["prefetch_attempts"].append(
+        {
+            "batch": 3,
+            "attempt": 3,
+            "mirror": {"server": "https://recovered.example/artix/$repo/os/$arch"},
+            "result": "pass",
+            "failure_class": None,
+            "detail": None,
+        }
+    )
+    recovered_failure = classify_repository_closure_failure(
+        "acquisition",
+        RuntimeError("failed to persist acquisition evidence"),
+        recovered_acquisition_evidence,
+    )
+    assert recovered_failure["cause"] == "runtime_error"
+    assert recovered_failure["context"] == {}
     hash_failure = classify_repository_closure_failure(
         "cache-verification",
         RuntimeError("prefetched package SHA-256 mismatch for fixture.pkg.tar.zst: deadbeef"),
@@ -3049,6 +3445,7 @@ def self_test() -> int:
                 "filename": "alpha.pkg.tar.zst",
                 "sha256": hashlib.sha256(alpha_bytes).hexdigest(),
                 "size_bytes": len(alpha_bytes),
+                "pgp_signature_sha256": "a" * 64,
             },
             {
                 "repository": "system",
@@ -3057,6 +3454,7 @@ def self_test() -> int:
                 "filename": "beta.pkg.tar.zst",
                 "sha256": hashlib.sha256(beta_bytes).hexdigest(),
                 "size_bytes": len(beta_bytes),
+                "pgp_signature_sha256": "b" * 64,
             },
         ]
         acquire_batches = plan_package_prefetch_batches(acquire_packages, max_bytes=1024)
@@ -3120,6 +3518,27 @@ def self_test() -> int:
             raise AssertionError("failed prefetch batch must fail closed")
         assert failed_progress == [(False, 1, 1)]
         assert verified_cached_filenames(batch_cache, acquire_packages) == {"alpha.pkg.tar.zst"}
+        resume_audit = audit_persistent_package_cache(batch_cache, acquire_packages)
+        assert resume_audit["reused_filenames"] == ["alpha.pkg.tar.zst"]
+        assert resume_audit["pending_filenames"] == ["beta.pkg.tar.zst"]
+        resume_packages = [
+            package
+            for package in acquire_packages
+            if package["filename"] in set(resume_audit["pending_filenames"])
+        ]
+        resume_batches = plan_package_prefetch_batches(resume_packages, max_bytes=1024)
+        resume_calls: list[list[str]] = []
+
+        def resume_fixture_fetch(_index: int, batch: list[dict[str, Any]]) -> None:
+            resume_calls.append([package["name"] for package in batch])
+            for package in batch:
+                assert package["name"] == "beta"
+                (batch_cache / package["filename"]).write_bytes(beta_bytes)
+
+        resumed = acquire_prefetch_batches(batch_cache, resume_batches, resume_fixture_fetch)
+        assert resumed == {"beta.pkg.tar.zst"}
+        assert resume_calls == [["beta"]]
+        assert verified_cached_filenames(batch_cache, acquire_packages) == {"alpha.pkg.tar.zst", "beta.pkg.tar.zst"}
 
         for path in tuple(batch_cache.iterdir()):
             path.unlink()
@@ -3211,6 +3630,7 @@ def self_test() -> int:
         ) -> None:
             for package in attempt_packages:
                 payload = alpha_bytes if package["name"] == "alpha" else beta_bytes
+                (batch_cache / f"{package['filename']}.sig").write_bytes(b"stale-signature")
                 (batch_cache / package["filename"]).write_bytes(payload)
             raise RuntimeError("simulated pacman nonzero after complete bytes")
 
@@ -3234,6 +3654,14 @@ def self_test() -> int:
         assert retried_verified == {"alpha.pkg.tar.zst", "beta.pkg.tar.zst"}
         assert clean_retry_calls == [["alpha", "beta"], ["alpha", "beta"]]
         assert [attempt["result"] for attempt in retried_attempts] == ["fail", "pass"]
+        assert all(
+            f"{package['filename']}.sig" in retried_attempts[0]["removed_unverified"]
+            for package in acquire_packages
+        )
+        assert all(
+            not (batch_cache / f"{package['filename']}.sig").exists()
+            for package in acquire_packages
+        )
 
         for path in tuple(batch_cache.iterdir()):
             path.unlink()
@@ -3250,7 +3678,33 @@ def self_test() -> int:
             raise AssertionError("nonzero pacman attempt must not become PASS from SHA evidence alone")
 
     # A7 final-boundary regressions: repository DB immutability, verified-only
-    # local repository construction, and no buildiso launch with unresolved work.
+    # local repository construction, live read-only mount enforcement, and no
+    # buildiso launch with unresolved or post-validation-tampered work.
+    with tempfile.TemporaryDirectory(prefix="portus-artix-readonly-bind-self-test-") as raw_readonly_bind:
+        readonly_path = Path(raw_readonly_bind) / "frozen"
+        readonly_path.mkdir()
+        mount_state = {"mounted": False, "read_only": False}
+        mount_calls: list[list[str]] = []
+
+        def fake_mount_runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+            mount_calls.append(list(command))
+            if command[1:2] == ["--bind"]:
+                mount_state["mounted"] = True
+            elif command[1:3] == ["-o", "remount,bind,ro"]:
+                mount_state["read_only"] = True
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        bind_mount_read_only(
+            readonly_path,
+            runner=fake_mount_runner,
+            mountpoint_checker=lambda _path: mount_state["mounted"],
+            read_only_checker=lambda _path: mount_state["read_only"],
+        )
+        assert mount_calls == [
+            ["mount", "--bind", str(readonly_path), str(readonly_path)],
+            ["mount", "-o", "remount,bind,ro", str(readonly_path)],
+        ]
+
     with tempfile.TemporaryDirectory(prefix="portus-artix-frozen-db-self-test-") as raw_frozen_db:
         frozen_db_root = Path(raw_frozen_db) / "sync"
         frozen_db_root.mkdir()
@@ -3350,9 +3804,42 @@ def self_test() -> int:
         assert all((local_repository / f"{name}.db").is_file() for name in FROZEN_REPOSITORIES)
         assert all((local_repository / package["filename"]).is_symlink() for package in acquire_packages)
 
+        freeze_local_repository(local_repository)
+        boundary_cache_target = boundary_root / "cache-target"
+        boundary_sync_target = boundary_root / "sync-target"
+        boundary_sync_target.mkdir()
+        for repository_name in FROZEN_REPOSITORIES:
+            shutil.copy2(boundary_snapshot / f"{repository_name}.db", boundary_sync_target / f"{repository_name}.db")
+        freeze_repository_sync_directory(boundary_sync_target)
+        local_repository_target = boundary_root / "repo-target"
+        shutil.copytree(local_repository, local_repository_target, symlinks=True)
+        freeze_local_repository(local_repository_target)
+        boundary_cache_target.mkdir()
+        for package in acquire_packages:
+            payload = alpha_bytes if package["name"] == "alpha" else beta_bytes
+            (boundary_cache_target / package["filename"]).write_bytes(payload)
+        boundary_pacman_config = boundary_root / "iso-x86_64.conf"
+        boundary_frozen_config = render_frozen_pacman_config(
+            "[options]\nSigLevel = Required DatabaseOptional\n\n[system]\nInclude = /etc/pacman.d/mirrorlist\n\n[world]\nInclude = /etc/pacman.d/mirrorlist\n\n[galaxy]\nInclude = /etc/pacman.d/mirrorlist\n",
+            "file:///run/portus-build/repository-closure/repo",
+        )
+        boundary_pacman_config.write_text(boundary_frozen_config, encoding="utf-8")
+        boundary_pacman_config.chmod(0o444)
         ready_evidence = {
             "status": "pass",
             "failure": None,
+            "network_pacman_config": {
+                "path": LOCKED_STABLE_PACMAN_CONFIG,
+                "sha256": "e" * 64,
+            },
+            "repositories": [
+                {
+                    "name": name,
+                    "database_sha256": sha256_file(boundary_snapshot / f"{name}.db"),
+                    "database_size_bytes": (boundary_snapshot / f"{name}.db").stat().st_size,
+                }
+                for name in FROZEN_REPOSITORIES
+            ],
             "packages": copy.deepcopy(acquire_packages),
             "package_progress": copy.deepcopy(verified_progress),
             "progress_summary": copy.deepcopy(verified_summary),
@@ -3360,15 +3847,22 @@ def self_test() -> int:
                 "verified_count": len(acquire_packages),
                 "prefetch_pending_count": 0,
                 "outer_owner_restored": True,
+                "source_read_only_for_buildiso": True,
                 "read_only_for_buildiso": True,
             },
             "frozen_pacman_config": {
+                "path": LOCKED_STABLE_PACMAN_CONFIG,
+                "sha256": hashlib.sha256(boundary_frozen_config.encode("utf-8")).hexdigest(),
                 "server": "file:///run/portus-build/repository-closure/repo",
                 "network_repositories_enabled": False,
+                "read_only_for_buildiso": True,
             },
             "local_validation": {
+                "resolved_package_count": len(acquire_packages),
                 "resolution_matches": True,
                 "package_files_verified": True,
+                "repository_read_only": True,
+                "cache_reverified_after_local_validation": True,
                 "network_repositories_enabled": False,
             },
             "buildiso_gate": {
@@ -3377,17 +3871,41 @@ def self_test() -> int:
                 "verified_package_count": len(acquire_packages),
                 "repository_databases_immutable": True,
                 "local_repository_constructed": True,
+                "local_repository_read_only": True,
+                "pacman_config_read_only": True,
                 "local_resolution_matches": True,
+                "post_validation_cache_verified": True,
                 "cache_outer_owner_restored": True,
+                "cache_source_read_only": True,
                 "cache_read_only": True,
             },
         }
+        runtime_paths = {
+            "repository_sync_source": boundary_snapshot,
+            "repository_sync_target": boundary_sync_target,
+            "database_snapshot": boundary_snapshot,
+            "local_repository_source": local_repository,
+            "local_repository_target": local_repository_target,
+            "pacman_config": boundary_pacman_config,
+            "cache_source": boundary_cache,
+            "cache_target": boundary_cache_target,
+        }
+        frozen_runtime_paths = set(runtime_paths.values())
         buildiso_calls: list[list[str]] = []
 
         def fake_buildiso_runner(command: list[str]) -> None:
             buildiso_calls.append(list(command))
 
-        run_buildiso_after_security_boundary(ready_evidence, ["/usr/bin/buildiso", "-p", "portus"], fake_buildiso_runner)
+        def fake_read_only_mount(path: Path) -> bool:
+            return path in frozen_runtime_paths
+
+        run_buildiso_after_security_boundary(
+            ready_evidence,
+            ["/usr/bin/buildiso", "-p", "portus"],
+            fake_buildiso_runner,
+            runtime_paths=runtime_paths,
+            read_only_mount_checker=fake_read_only_mount,
+        )
         assert buildiso_calls == [["/usr/bin/buildiso", "-p", "portus"]]
 
         unresolved_evidence = copy.deepcopy(ready_evidence)
@@ -3407,11 +3925,154 @@ def self_test() -> int:
                 unresolved_evidence,
                 ["/usr/bin/buildiso", "-p", "portus"],
                 fake_buildiso_runner,
+                runtime_paths=runtime_paths,
+                read_only_mount_checker=fake_read_only_mount,
             )
         except RuntimeError as error:
             assert "unresolved frozen packages" in str(error)
         else:
             raise AssertionError("buildiso must not start with even one unresolved frozen package")
+        assert buildiso_calls == [["/usr/bin/buildiso", "-p", "portus"]]
+
+        boundary_pacman_config.chmod(0o644)
+        boundary_pacman_config.write_text("tampered-network-config\n", encoding="utf-8")
+        boundary_pacman_config.chmod(0o444)
+        try:
+            run_buildiso_after_security_boundary(
+                ready_evidence,
+                ["/usr/bin/buildiso", "-p", "portus"],
+                fake_buildiso_runner,
+                runtime_paths=runtime_paths,
+                read_only_mount_checker=fake_read_only_mount,
+            )
+        except RuntimeError as error:
+            assert "pacman configuration drifted" in str(error)
+        else:
+            raise AssertionError("buildiso must reject local-only pacman configuration drift after validation")
+        boundary_pacman_config.chmod(0o644)
+        boundary_pacman_config.write_text(boundary_frozen_config, encoding="utf-8")
+        boundary_pacman_config.chmod(0o444)
+
+        drifted_progress_identity_evidence = copy.deepcopy(ready_evidence)
+        drifted_progress_identity_evidence["package_progress"][0]["version"] = "drifted-1"
+        try:
+            run_buildiso_after_security_boundary(
+                drifted_progress_identity_evidence,
+                ["/usr/bin/buildiso", "-p", "portus"],
+                fake_buildiso_runner,
+                runtime_paths=runtime_paths,
+                read_only_mount_checker=fake_read_only_mount,
+            )
+        except RuntimeError as error:
+            assert "identity drifted" in str(error)
+        else:
+            raise AssertionError("buildiso must bind package progress identities to the frozen closure")
+
+        spoofed_progress_evidence = copy.deepcopy(ready_evidence)
+        spoofed_progress_evidence["package_progress"] = unresolved_progress
+        try:
+            run_buildiso_after_security_boundary(
+                spoofed_progress_evidence,
+                ["/usr/bin/buildiso", "-p", "portus"],
+                fake_buildiso_runner,
+                runtime_paths=runtime_paths,
+                read_only_mount_checker=fake_read_only_mount,
+            )
+        except RuntimeError as error:
+            assert "unresolved frozen packages" in str(error)
+        else:
+            raise AssertionError("buildiso must recompute package progress instead of trusting a stale passing summary")
+
+        alpha_cache = boundary_cache / acquire_packages[0]["filename"]
+        alpha_cache.write_bytes(b"tampered-after-validation")
+        try:
+            run_buildiso_after_security_boundary(
+                ready_evidence,
+                ["/usr/bin/buildiso", "-p", "portus"],
+                fake_buildiso_runner,
+                runtime_paths=runtime_paths,
+                read_only_mount_checker=fake_read_only_mount,
+            )
+        except RuntimeError as error:
+            assert "SHA-256 mismatch" in str(error)
+        else:
+            raise AssertionError("buildiso must rehash the live cache immediately before launch")
+        alpha_cache.write_bytes(alpha_bytes)
+
+        beta_target_cache = boundary_cache_target / acquire_packages[1]["filename"]
+        beta_target_cache.write_bytes(b"tampered-consumer-cache")
+        try:
+            run_buildiso_after_security_boundary(
+                ready_evidence,
+                ["/usr/bin/buildiso", "-p", "portus"],
+                fake_buildiso_runner,
+                runtime_paths=runtime_paths,
+                read_only_mount_checker=fake_read_only_mount,
+            )
+        except RuntimeError as error:
+            assert "SHA-256 mismatch" in str(error)
+        else:
+            raise AssertionError("buildiso must rehash the chroot-consumer cache view immediately before launch")
+        beta_target_cache.write_bytes(beta_bytes)
+
+        system_local_db = local_repository / "system.db"
+        alpha_cache.write_bytes(alpha_bytes)
+
+        system_local_db = local_repository / "system.db"
+        system_local_db.chmod(0o644)
+        system_local_db.write_bytes(b"tampered-database")
+        system_local_db.chmod(0o444)
+        try:
+            run_buildiso_after_security_boundary(
+                ready_evidence,
+                ["/usr/bin/buildiso", "-p", "portus"],
+                fake_buildiso_runner,
+                runtime_paths=runtime_paths,
+                read_only_mount_checker=fake_read_only_mount,
+            )
+        except RuntimeError as error:
+            assert "repository DB drifted" in str(error)
+        else:
+            raise AssertionError("buildiso must reject local repository DB drift after validation")
+        system_local_db.chmod(0o644)
+        system_local_db.write_bytes(b"system")
+        system_local_db.chmod(0o444)
+
+        target_world_db = local_repository_target / "world.db"
+        target_world_db.chmod(0o644)
+        target_world_db.write_bytes(b"tampered-consumer-database")
+        target_world_db.chmod(0o444)
+        try:
+            run_buildiso_after_security_boundary(
+                ready_evidence,
+                ["/usr/bin/buildiso", "-p", "portus"],
+                fake_buildiso_runner,
+                runtime_paths=runtime_paths,
+                read_only_mount_checker=fake_read_only_mount,
+            )
+        except RuntimeError as error:
+            assert "local_repository_target/world.db" in str(error)
+        else:
+            raise AssertionError("buildiso must reject DB drift in the chroot-consumer local repository view")
+        target_world_db.chmod(0o644)
+        target_world_db.write_bytes(b"world")
+        target_world_db.chmod(0o444)
+
+        def missing_cache_target_read_only_mount(path: Path) -> bool:
+            return path in frozen_runtime_paths and path != boundary_cache_target
+
+        try:
+            run_buildiso_after_security_boundary(
+                ready_evidence,
+                ["/usr/bin/buildiso", "-p", "portus"],
+                fake_buildiso_runner,
+                runtime_paths=runtime_paths,
+                read_only_mount_checker=missing_cache_target_read_only_mount,
+            )
+        except RuntimeError as error:
+            assert "cache_target" in str(error)
+        else:
+            raise AssertionError("buildiso must not start if the cache target loses its read-only mount")
         assert buildiso_calls == [["/usr/bin/buildiso", "-p", "portus"]]
 
     mirror_fixture = (
@@ -3420,12 +4081,14 @@ def self_test() -> int:
         "Server = http://legacy.example/$repo/os/$arch\n"
         "Server = https://first.example/artix/$repo/os/$arch\n"
         "Server = https://second.example/artix/$repo/os/$arch\n"
+        "Server = https://third.example/artix/$repo/os/$arch\n"
         "Server = https://first.example/artix/$repo/os/$arch\n"
     )
     mirror_candidates = parse_artix_mirror_servers(mirror_fixture)
     assert mirror_candidates == [
         {"server": "https://first.example/artix/$repo/os/$arch", "mirrorlist_line": 4},
         {"server": "https://second.example/artix/$repo/os/$arch", "mirrorlist_line": 5},
+        {"server": "https://third.example/artix/$repo/os/$arch", "mirrorlist_line": 6},
     ]
     ordered_mirrors = ordered_prefetch_mirrors(
         mirror_candidates,
@@ -3434,7 +4097,7 @@ def self_test() -> int:
     )
     assert [mirror["server"] for mirror in ordered_mirrors] == [
         "https://second.example/artix/$repo/os/$arch",
-        "https://first.example/artix/$repo/os/$arch",
+        "https://third.example/artix/$repo/os/$arch",
     ]
     try:
         ordered_prefetch_mirrors(mirror_candidates, mirror_candidates[0], max_attempts=0)
@@ -3442,6 +4105,16 @@ def self_test() -> int:
         pass
     else:
         raise AssertionError("non-positive mirror failover limit must fail closed")
+    try:
+        ordered_prefetch_mirrors(
+            mirror_candidates,
+            {"server": mirror_candidates[1]["server"], "mirrorlist_line": 99},
+            max_attempts=2,
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("selected anchor mirrorlist identity drift must fail closed")
     try:
         ordered_prefetch_mirrors(
             mirror_candidates,
