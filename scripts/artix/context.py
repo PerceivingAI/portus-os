@@ -28,6 +28,7 @@ REPOSITORY_CLOSURE_FILE = "repository-closure.json"
 PACMAN_PRINT_FORMAT = "%r|%n|%v|%f|%h|%s|%a"
 PACKAGE_TARGET_RE = re.compile(r"^[A-Za-z0-9@._+:-]+$")
 FROZEN_REPOSITORIES = ("system", "world", "galaxy")
+PACKAGE_PREFETCH_BATCH_LIMIT_BYTES = 192 * 1024 * 1024
 
 
 def utc_now() -> str:
@@ -632,6 +633,116 @@ def verify_cached_package_files(cache: Path, packages: list[dict[str, Any]]) -> 
             )
 
 
+def plan_package_prefetch_batches(
+    packages: list[dict[str, Any]],
+    max_bytes: int = PACKAGE_PREFETCH_BATCH_LIMIT_BYTES,
+) -> list[list[dict[str, Any]]]:
+    """Partition exact package identities into deterministic byte-bounded batches."""
+    if max_bytes <= 0:
+        raise ValueError("package prefetch batch limit must be positive")
+    ordered = sorted(
+        packages,
+        key=lambda entry: (
+            entry["repository"],
+            entry["name"],
+            entry["version"],
+            entry["filename"],
+        ),
+    )
+    batches: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_bytes = 0
+    for package in ordered:
+        size_bytes = package["size_bytes"]
+        if not isinstance(size_bytes, int) or size_bytes < 0:
+            raise RuntimeError(f"package has invalid download size for batching: {package.get('name', '<unknown>')}")
+        if current and current_bytes + size_bytes > max_bytes:
+            batches.append(current)
+            current = []
+            current_bytes = 0
+        current.append(package)
+        current_bytes += size_bytes
+        if size_bytes > max_bytes:
+            batches.append(current)
+            current = []
+            current_bytes = 0
+    if current:
+        batches.append(current)
+    return batches
+
+
+def exact_package_sync_targets(packages: list[dict[str, Any]]) -> list[str]:
+    return [f"{package['repository']}/{package['name']}" for package in packages]
+
+
+def acquire_prefetch_batches(
+    cache: Path,
+    batches: list[list[dict[str, Any]]],
+    fetch_batch: Any,
+    progress: Any | None = None,
+) -> set[str]:
+    """Fetch deterministic batches and retain only hash-verified completed identities."""
+    pending = {
+        package["filename"]
+        for batch in batches
+        for package in batch
+    }
+    verified: set[str] = set()
+    for batch_index, batch in enumerate(batches, start=1):
+        batch_error: BaseException | None = None
+        try:
+            fetch_batch(batch_index, batch)
+        except BaseException as error:
+            batch_error = error
+
+        verified_batch = verified_cached_filenames(cache, batch)
+        verified.update(verified_batch)
+        pending.difference_update(verified_batch)
+        missing_batch = [
+            package["filename"]
+            for package in batch
+            if package["filename"] not in verified_batch
+        ]
+        batch_complete = batch_error is None and not missing_batch
+        if progress is not None:
+            progress(
+                batch_index,
+                len(batches),
+                batch,
+                verified_batch,
+                pending,
+                batch_error,
+                batch_complete,
+            )
+
+        if batch_error is not None:
+            if isinstance(batch_error, (KeyboardInterrupt, SystemExit)):
+                raise batch_error
+            raise RuntimeError(
+                f"package prefetch batch {batch_index}/{len(batches)} failed; "
+                f"{len(verified_batch)}/{len(batch)} batch package files verified before failure"
+            ) from batch_error
+
+        if missing_batch:
+            raise RuntimeError(
+                f"package prefetch batch {batch_index}/{len(batches)} completed without verified files: "
+                + ", ".join(missing_batch)
+            )
+
+    if pending:
+        raise RuntimeError(f"package prefetch completed with {len(pending)} unresolved package files")
+    return verified
+
+
+def verified_cached_filenames(cache: Path, packages: list[dict[str, Any]]) -> set[str]:
+    verified: set[str] = set()
+    for package in packages:
+        cached = cache / package["filename"]
+        if cached.is_file() and sha256_file(cached) == package["sha256"]:
+            verified.add(package["filename"])
+    return verified
+
+
 def parse_artix_mirror_servers(text: str) -> list[dict[str, Any]]:
     """Return active HTTPS Artix mirror templates in mirrorlist order."""
     candidates: list[dict[str, Any]] = []
@@ -940,23 +1051,66 @@ def prepare_repository_closure(
             cache_valid_before.add(package["filename"])
             reused_count += 1
 
-        chroot(
-            repo,
-            native_config,
-            [
-                "/usr/bin/pacman",
-                "-Sw",
-                "--noconfirm",
-                "--config",
-                pacman_config,
-                "--dbpath",
-                closure_db_inside,
-                "--cachedir",
-                "/var/cache/pacman/pkg",
-                *targets,
-            ],
+        pending_packages = [
+            package for package in packages if package["filename"] not in cache_valid_before
+        ]
+        prefetch_batches = plan_package_prefetch_batches(pending_packages)
+        prefetched_verified: set[str] = set()
+        evidence["cache"].update(
+            {
+                "reused_count": reused_count,
+                "corrupt_entries_removed": sorted(corrupt_removed),
+                "prefetch_batch_limit_bytes": PACKAGE_PREFETCH_BATCH_LIMIT_BYTES,
+                "prefetch_batch_count": len(prefetch_batches),
+                "prefetch_completed_batch_count": 0,
+                "prefetch_pending_count": len(pending_packages),
+            }
         )
+        write_repository_closure_evidence(manifest_file, evidence)
 
+        def fetch_prefetch_batch(_batch_index: int, batch: list[dict[str, Any]]) -> None:
+            chroot(
+                repo,
+                native_config,
+                [
+                    "/usr/bin/pacman",
+                    "-Sw",
+                    "--noconfirm",
+                    "--config",
+                    anchor_config_inside,
+                    "--dbpath",
+                    closure_db_inside,
+                    "--cachedir",
+                    "/var/cache/pacman/pkg",
+                    "--nodeps",
+                    "--nodeps",
+                    *exact_package_sync_targets(batch),
+                ],
+            )
+
+        def record_prefetch_progress(
+            batch_index: int,
+            _batch_count: int,
+            _batch: list[dict[str, Any]],
+            verified_batch: set[str],
+            pending_filenames: set[str],
+            _batch_error: BaseException | None,
+            batch_complete: bool,
+        ) -> None:
+            prefetched_verified.update(verified_batch)
+            evidence["cache"]["downloaded_or_recovered_count"] = len(prefetched_verified)
+            evidence["cache"]["verified_count"] = reused_count + len(prefetched_verified)
+            evidence["cache"]["prefetch_pending_count"] = len(pending_filenames)
+            if batch_complete:
+                evidence["cache"]["prefetch_completed_batch_count"] = batch_index
+            write_repository_closure_evidence(manifest_file, evidence)
+
+        acquire_prefetch_batches(
+            cache_host,
+            prefetch_batches,
+            fetch_prefetch_batch,
+            record_prefetch_progress,
+        )
         verify_cached_package_files(cache_host, packages)
         for package in packages:
             link = frozen_repo / package["filename"]
@@ -966,15 +1120,17 @@ def prepare_repository_closure(
                 (frozen_repo / signature.name).symlink_to(Path("/var/cache/pacman/pkg") / signature.name)
             package["cached_before"] = package["filename"] in cache_valid_before
         evidence["packages"] = packages
-        evidence["cache"] = {
-            "path": PACKAGE_CACHE_PATH.as_posix(),
-            "reused_count": reused_count,
-            "downloaded_or_recovered_count": len(packages) - reused_count,
-            "corrupt_entries_removed": sorted(corrupt_removed),
-            "verified_count": len(packages),
-            "read_only_for_buildiso": False,
-            "outer_owner_restored": False,
-        }
+        evidence["cache"].update(
+            {
+                "reused_count": reused_count,
+                "downloaded_or_recovered_count": len(packages) - reused_count,
+                "corrupt_entries_removed": sorted(corrupt_removed),
+                "verified_count": len(packages),
+                "prefetch_pending_count": 0,
+                "read_only_for_buildiso": False,
+                "outer_owner_restored": False,
+            }
+        )
 
         frozen_config = render_frozen_pacman_config(original_config, local_server)
         pacman_config_host.write_text(frozen_config, encoding="utf-8")
@@ -1774,6 +1930,153 @@ def self_test() -> int:
             pass
         else:
             raise AssertionError("corrupt package cache entry must fail closed")
+    batch_fixture = [
+        {
+            "repository": "world",
+            "name": "delta",
+            "version": "1-1",
+            "filename": "delta.pkg.tar.zst",
+            "sha256": "d" * 64,
+            "size_bytes": 60,
+        },
+        {
+            "repository": "system",
+            "name": "alpha",
+            "version": "1-1",
+            "filename": "alpha.pkg.tar.zst",
+            "sha256": "a" * 64,
+            "size_bytes": 40,
+        },
+        {
+            "repository": "world",
+            "name": "charlie",
+            "version": "1-1",
+            "filename": "charlie.pkg.tar.zst",
+            "sha256": "c" * 64,
+            "size_bytes": 80,
+        },
+        {
+            "repository": "system",
+            "name": "bravo",
+            "version": "1-1",
+            "filename": "bravo.pkg.tar.zst",
+            "sha256": "b" * 64,
+            "size_bytes": 250,
+        },
+    ]
+    batch_plan = plan_package_prefetch_batches(batch_fixture, max_bytes=100)
+    assert [[entry["name"] for entry in batch] for batch in batch_plan] == [
+        ["alpha"],
+        ["bravo"],
+        ["charlie"],
+        ["delta"],
+    ]
+    assert sum(entry["size_bytes"] for entry in batch_plan[1]) == 250
+    assert all(
+        sum(entry["size_bytes"] for entry in batch) <= 100 or len(batch) == 1
+        for batch in batch_plan
+    )
+    compact_batch_plan = plan_package_prefetch_batches(
+        [
+            {**batch_fixture[0], "repository": "system", "name": "a", "size_bytes": 40},
+            {**batch_fixture[1], "repository": "system", "name": "b", "size_bytes": 50},
+            {**batch_fixture[2], "repository": "system", "name": "c", "size_bytes": 20},
+        ],
+        max_bytes=100,
+    )
+    assert [[entry["name"] for entry in batch] for batch in compact_batch_plan] == [["a", "b"], ["c"]]
+    assert exact_package_sync_targets(compact_batch_plan[0]) == ["system/a", "system/b"]
+    try:
+        plan_package_prefetch_batches(batch_fixture, max_bytes=0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("non-positive prefetch byte limit must fail closed")
+
+    with tempfile.TemporaryDirectory(prefix="portus-artix-batch-acquire-self-test-") as raw_batch_cache:
+        batch_cache = Path(raw_batch_cache)
+        alpha_bytes = b"alpha-package"
+        beta_bytes = b"beta-package"
+        acquire_packages = [
+            {
+                "repository": "system",
+                "name": "alpha",
+                "version": "1-1",
+                "filename": "alpha.pkg.tar.zst",
+                "sha256": hashlib.sha256(alpha_bytes).hexdigest(),
+                "size_bytes": len(alpha_bytes),
+            },
+            {
+                "repository": "system",
+                "name": "beta",
+                "version": "1-1",
+                "filename": "beta.pkg.tar.zst",
+                "sha256": hashlib.sha256(beta_bytes).hexdigest(),
+                "size_bytes": len(beta_bytes),
+            },
+        ]
+        acquire_batches = plan_package_prefetch_batches(acquire_packages, max_bytes=1024)
+        acquire_progress: list[tuple[int, int, bool, int, int]] = []
+
+        def successful_fixture_fetch(_index: int, batch: list[dict[str, Any]]) -> None:
+            for package in batch:
+                payload = alpha_bytes if package["name"] == "alpha" else beta_bytes
+                (batch_cache / package["filename"]).write_bytes(payload)
+
+        def record_fixture_progress(
+            index: int,
+            count: int,
+            _batch: list[dict[str, Any]],
+            verified_batch: set[str],
+            pending: set[str],
+            _error: BaseException | None,
+            complete: bool,
+        ) -> None:
+            acquire_progress.append((index, count, complete, len(verified_batch), len(pending)))
+
+        acquired = acquire_prefetch_batches(
+            batch_cache,
+            acquire_batches,
+            successful_fixture_fetch,
+            record_fixture_progress,
+        )
+        assert acquired == {"alpha.pkg.tar.zst", "beta.pkg.tar.zst"}
+        assert acquire_progress == [(1, 1, True, 2, 0)]
+
+        for path in batch_cache.iterdir():
+            path.unlink()
+        failed_progress: list[tuple[bool, int, int]] = []
+
+        def partial_fixture_fetch(_index: int, batch: list[dict[str, Any]]) -> None:
+            first = batch[0]
+            (batch_cache / first["filename"]).write_bytes(alpha_bytes)
+            raise RuntimeError("simulated network failure")
+
+        def record_failed_progress(
+            _index: int,
+            _count: int,
+            _batch: list[dict[str, Any]],
+            verified_batch: set[str],
+            pending: set[str],
+            _error: BaseException | None,
+            complete: bool,
+        ) -> None:
+            failed_progress.append((complete, len(verified_batch), len(pending)))
+
+        try:
+            acquire_prefetch_batches(
+                batch_cache,
+                acquire_batches,
+                partial_fixture_fetch,
+                record_failed_progress,
+            )
+        except RuntimeError as error:
+            assert "1/2 batch package files verified before failure" in str(error)
+        else:
+            raise AssertionError("failed prefetch batch must fail closed")
+        assert failed_progress == [(False, 1, 1)]
+        assert verified_cached_filenames(batch_cache, acquire_packages) == {"alpha.pkg.tar.zst"}
+
     mirror_fixture = (
         "# disabled\n"
         "#Server = https://disabled.example/$repo/os/$arch\n"

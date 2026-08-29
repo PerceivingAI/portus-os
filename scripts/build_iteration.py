@@ -10,6 +10,7 @@ identity, and a checksum manifest. Failed/blocked attempts are retained too.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -290,7 +291,8 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
         "local_validation",
         "failure",
     }
-    if set(report) != required:
+    allowed = required | {"repository_anchor"}
+    if not required.issubset(report) or not set(report).issubset(allowed):
         raise ValueError("repository closure report keys differ from the locked evidence shape")
     if report.get("schema_version") != SCHEMA_VERSION or report.get("run_id") != run_id:
         raise ValueError("repository closure report identity mismatch")
@@ -306,6 +308,18 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
             raise ValueError("passing repository closure report contains a failure")
         if not report["packages"] or len(report["repositories"]) != 3:
             raise ValueError("passing repository closure report lacks frozen package/repository evidence")
+        anchor = report.get("repository_anchor")
+        selected_anchor = anchor.get("selected") if isinstance(anchor, dict) else None
+        if (
+            not isinstance(anchor, dict)
+            or anchor.get("status") != "pass"
+            or anchor.get("database_sync_locked") is not True
+            or not isinstance(anchor.get("attempts"), list)
+            or not isinstance(selected_anchor, dict)
+            or not isinstance(selected_anchor.get("server"), str)
+            or not selected_anchor["server"].startswith("https://")
+        ):
+            raise ValueError("passing repository closure report did not prove one locked HTTPS repository anchor")
         frozen = report.get("frozen_pacman_config")
         local = report.get("local_validation")
         cache = report.get("cache")
@@ -669,6 +683,15 @@ def self_test() -> int:
             "profile_sha256": {"common": "a" * 64, "portus": "b" * 64},
             "network_pacman_config": {"path": "/usr/share/artools/pacman.conf.d/iso-x86_64.conf", "sha256": "c" * 64},
             "mirrorlist": {"path": "/etc/pacman.d/mirrorlist", "sha256": "d" * 64},
+            "repository_anchor": {
+                "status": "pass",
+                "selected": {"server": "https://mirror.example/artix/$repo/os/$arch", "mirrorlist_line": 1},
+                "attempts": [{"server": "https://mirror.example/artix/$repo/os/$arch", "mirrorlist_line": 1, "result": "pass", "detail": None}],
+                "candidate_count": 1,
+                "database_sync_locked": True,
+                "pacman_config_path": "/run/portus-build/repository-closure/anchor-pacman.conf",
+                "pacman_config_sha256": "e" * 64,
+            },
             "repositories": [{"name": name} for name in ("system", "world", "galaxy")],
             "packages": [{"name": "base"}],
             "cache": {
@@ -682,6 +705,20 @@ def self_test() -> int:
             "failure": None,
         }
         assert validate_repository_closure_report(closure_fixture, "run-1") == "pass"
+        closure_fixture["repository_anchor"]["database_sync_locked"] = False
+        try:
+            validate_repository_closure_report(closure_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("repository closure evidence must fail closed on an unlocked repository anchor")
+        closure_fixture["repository_anchor"]["database_sync_locked"] = True
+        historical_failed_fixture = copy.deepcopy(closure_fixture)
+        historical_failed_fixture.pop("repository_anchor")
+        historical_failed_fixture["status"] = "fail"
+        historical_failed_fixture["failure"] = "historical pre-anchor closure failure"
+        historical_failed_fixture["local_validation"] = None
+        assert validate_repository_closure_report(historical_failed_fixture, "run-1") == "fail"
         closure_fixture["local_validation"] = {"resolution_matches": False, "package_files_verified": True}
         try:
             validate_repository_closure_report(closure_fixture, "run-1")
