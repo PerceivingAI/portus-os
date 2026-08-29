@@ -57,6 +57,34 @@ PACKAGE_ACQUISITION_FAILURE_CLASSES = {
     "process_failed",
     "runtime_error",
 }
+REPOSITORY_CLOSURE_SUBSTAGES = {
+    "mirror-selection",
+    "repository-sync",
+    "resolution",
+    "acquisition",
+    "cache-verification",
+    "local-validation",
+}
+REPOSITORY_CLOSURE_FAILURE_CAUSES = {
+    "interrupted",
+    "timeout",
+    "tls_eof",
+    "tls_failure",
+    "http_404",
+    "hash_mismatch",
+    "signature_failure",
+    "dns",
+    "connection",
+    "no_eligible_mirror",
+    "mirror_configuration",
+    "repository_unavailable",
+    "resolution_incomplete",
+    "resolution_mismatch",
+    "missing_file",
+    "verification_incomplete",
+    "process_failed",
+    "runtime_error",
+}
 MIN_INSTALLER_PLAN_DISK_MIB = 40960
 MAX_INSTALLER_PLAN_DISK_MIB = 1048576
 SECRET_MARKERS = (
@@ -417,6 +445,55 @@ def validate_package_progress_evidence(report: dict[str, Any]) -> dict[str, Any]
     return expected_summary
 
 
+def validate_repository_closure_failure(failure: Any, status: str) -> dict[str, Any] | None:
+    """Validate A6 structured failure evidence while retaining historical strings."""
+    if status == "pass":
+        if failure is not None:
+            raise ValueError("passing repository closure report contains a failure")
+        return None
+    if isinstance(failure, str):
+        if not failure.strip():
+            raise ValueError("historical repository closure failure string is empty")
+        return None
+    if not isinstance(failure, dict) or set(failure) != {"substage", "cause", "detail", "context"}:
+        raise ValueError("failed repository closure report contains malformed A6 failure evidence")
+    substage = failure.get("substage")
+    cause = failure.get("cause")
+    detail = failure.get("detail")
+    context = failure.get("context")
+    if substage not in REPOSITORY_CLOSURE_SUBSTAGES or cause not in REPOSITORY_CLOSURE_FAILURE_CAUSES:
+        raise ValueError("failed repository closure report contains an invalid A6 substage/cause")
+    if not isinstance(detail, str) or not detail.strip() or len(detail) > 1000:
+        raise ValueError("failed repository closure report contains invalid A6 detail")
+    if not isinstance(context, dict):
+        raise ValueError("failed repository closure report contains invalid A6 context")
+    allowed_context = {"batch", "attempt", "mirror", "mirrorlist_line"}
+    if not set(context).issubset(allowed_context):
+        raise ValueError("failed repository closure report contains unknown A6 context keys")
+    for key in ("batch", "attempt", "mirrorlist_line"):
+        if key in context and (
+            not isinstance(context[key], int)
+            or isinstance(context[key], bool)
+            or context[key] < 1
+        ):
+            raise ValueError(f"failed repository closure report contains invalid A6 {key}")
+    if "mirror" in context and (
+        not isinstance(context["mirror"], str)
+        or not context["mirror"].startswith("https://")
+    ):
+        raise ValueError("failed repository closure report contains invalid A6 mirror")
+    return copy.deepcopy(failure)
+
+
+def format_repository_closure_failure_reason(failure: dict[str, Any] | None) -> str:
+    base = "native repository/package closure failed before buildiso could complete"
+    if failure is None:
+        return base
+    detail = " ".join(failure["detail"].split())
+    diagnosis = f"{failure['substage']} ({failure['cause']})"
+    return f"native repository/package closure failed at {diagnosis}: {detail[:500]}"
+
+
 def validate_repository_closure_report(report: Any, run_id: str) -> str:
     if not isinstance(report, dict):
         raise ValueError("repository closure report must be a JSON object")
@@ -449,9 +526,8 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
     if not isinstance(report.get("repositories"), list) or not isinstance(report.get("packages"), list):
         raise ValueError("repository closure repositories/packages must be lists")
     progress_summary = validate_package_progress_evidence(report)
+    validate_repository_closure_failure(report.get("failure"), status)
     if status == "pass":
-        if report.get("failure") is not None:
-            raise ValueError("passing repository closure report contains a failure")
         if not report["packages"] or len(report["repositories"]) != 3:
             raise ValueError("passing repository closure report lacks frozen package/repository evidence")
         if (
@@ -651,15 +727,16 @@ def capture_repository_closure_record(
     metadata: dict[str, Any],
     run_json: Path,
     run_id: str,
-) -> str | None:
+) -> tuple[str | None, dict[str, Any] | None]:
     path = run_dir / REPOSITORY_CLOSURE_FILE
     if not path.is_file():
-        return None
+        return None, None
     report = json.loads(path.read_text(encoding="utf-8"))
     status = validate_repository_closure_report(report, run_id)
+    failure = report.get("failure") if isinstance(report.get("failure"), dict) else None
     metadata["records"]["repository_closure_sha256"] = sha256_file(path)
     write_json(run_json, metadata)
-    return status
+    return status, copy.deepcopy(failure)
 
 
 def validate_native_cleanup_report(report: Any, run_id: str) -> str:
@@ -1092,7 +1169,16 @@ def self_test() -> int:
         assert validate_repository_closure_report(closure_fixture, "run-1") == "pass"
         current_failed_fixture = copy.deepcopy(closure_fixture)
         current_failed_fixture["status"] = "fail"
-        current_failed_fixture["failure"] = "simulated A5 acquisition failure"
+        current_failed_fixture["failure"] = {
+            "substage": "acquisition",
+            "cause": "timeout",
+            "detail": "Operation too slow while retrieving package payload",
+            "context": {
+                "batch": 1,
+                "attempt": 1,
+                "mirror": "https://mirror.example/artix/$repo/os/$arch",
+            },
+        }
         current_failed_fixture["local_validation"] = None
         current_failed_fixture["package_progress"][0].update(
             {
@@ -1116,6 +1202,18 @@ def self_test() -> int:
             },
         }
         assert validate_repository_closure_report(current_failed_fixture, "run-1") == "fail"
+        assert format_repository_closure_failure_reason(current_failed_fixture["failure"]) == (
+            "native repository/package closure failed at acquisition (timeout): "
+            "Operation too slow while retrieving package payload"
+        )
+        invalid_a6_fixture = copy.deepcopy(current_failed_fixture)
+        invalid_a6_fixture["failure"]["cause"] = "not-a-cause"
+        try:
+            validate_repository_closure_report(invalid_a6_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("current A6 closure failure must reject an unknown cause")
         current_failed_fixture["progress_summary"]["pending"]["packages"] = 0
         try:
             validate_repository_closure_report(current_failed_fixture, "run-1")
@@ -1638,8 +1736,14 @@ def main() -> int:
         return fail_run(metadata, run_json, run_dir, "native-iso-build", "interrupted", EXIT_INTERRUPTED)
 
     repository_closure_status: str | None = None
+    repository_closure_failure: dict[str, Any] | None = None
     try:
-        repository_closure_status = capture_repository_closure_record(run_dir, metadata, run_json, run_id)
+        repository_closure_status, repository_closure_failure = capture_repository_closure_record(
+            run_dir,
+            metadata,
+            run_json,
+            run_id,
+        )
     except (OSError, json.JSONDecodeError, ValueError) as error:
         append_log(log_path, f"repository closure evidence invalid: {error}")
         return fail_run(metadata, run_json, run_dir, "repository-closure", f"invalid repository closure evidence: {error}", 1)
@@ -1663,7 +1767,7 @@ def main() -> int:
                 run_json,
                 run_dir,
                 "repository-closure",
-                "native repository/package closure failed before buildiso could complete",
+                format_repository_closure_failure_reason(repository_closure_failure),
                 exit_code,
             )
         reason = (

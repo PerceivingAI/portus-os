@@ -722,6 +722,8 @@ def build_checks(repo: Path, config: dict[str, Any], config_path: Path, config_s
     )
     context_manager = repo / "scripts/artix/context.py"
     context_text = read_text(context_manager) if context_manager.is_file() else ""
+    iteration_manager = repo / "scripts/build_iteration.py"
+    iteration_text = read_text(iteration_manager) if iteration_manager.is_file() else ""
     closure_markers = (
         "prepare_repository_closure(",
         "repository-closure.json",
@@ -733,17 +735,27 @@ def build_checks(repo: Path, config: dict[str, Any], config_path: Path, config_s
         "acquire_batch_with_mirror_failover(",
         "audit_persistent_package_cache(",
         "summarize_package_progress(",
+        "classify_repository_closure_failure(",
+        "chroot_capture_stderr(",
         '"failure_class": failure_class',
         'local_server = f"file://{closure_inside}/repo"',
     )
-    closure_gate = all(marker in context_text for marker in closure_markers)
+    closure_consumer_markers = (
+        "validate_repository_closure_failure(",
+        "format_repository_closure_failure_reason(",
+        "REPOSITORY_CLOSURE_SUBSTAGES",
+        "REPOSITORY_CLOSURE_FAILURE_CAUSES",
+    )
+    closure_gate = all(marker in context_text for marker in closure_markers) and all(
+        marker in iteration_text for marker in closure_consumer_markers
+    )
     add_check(
         checks,
         "input.network-cache-closure",
         "input-availability",
         "pass" if closure_gate else "block",
         "native-run repository/package closure gate implemented" if closure_gate else "native-run repository/package closure gate missing",
-        "the native handoff anchors repository metadata, resolves the exact package closure, audits resumable cache state, acquires pending identities in bounded byte batches with bounded mirror failover, records per-package/byte progress and attempt failure classes, freezes buildiso onto a local-only run snapshot, and emits repository-closure.json"
+        "the native handoff anchors repository metadata, resolves the exact package closure, audits resumable cache state, acquires pending identities in bounded byte batches with bounded mirror failover, records per-package/byte progress and structured A6 substage/cause diagnosis, freezes buildiso onto a local-only run snapshot, emits repository-closure.json, and the outer harness validates/surfaces that diagnosis"
         if closure_gate
         else "native construction could pair stale pacman metadata with newer rolling Artix mirrors",
         None

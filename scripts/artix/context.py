@@ -37,6 +37,34 @@ PACKAGE_PROGRESS_STATES = (
     "corrupt_removed",
     "failed",
 )
+REPOSITORY_CLOSURE_SUBSTAGES = (
+    "mirror-selection",
+    "repository-sync",
+    "resolution",
+    "acquisition",
+    "cache-verification",
+    "local-validation",
+)
+REPOSITORY_CLOSURE_FAILURE_CAUSES = (
+    "interrupted",
+    "timeout",
+    "tls_eof",
+    "tls_failure",
+    "http_404",
+    "hash_mismatch",
+    "signature_failure",
+    "dns",
+    "connection",
+    "no_eligible_mirror",
+    "mirror_configuration",
+    "repository_unavailable",
+    "resolution_incomplete",
+    "resolution_mismatch",
+    "missing_file",
+    "verification_incomplete",
+    "process_failed",
+    "runtime_error",
+)
 
 
 def utc_now() -> str:
@@ -136,6 +164,22 @@ def snapshot_prepared_upper(repo: Path, prepared_config: dict[str, Any], native_
 
 def run(command: list[str], *, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, text=True, capture_output=capture, check=check)
+
+
+def run_capture_stderr(command: list[str]) -> subprocess.CompletedProcess[str]:
+    """Capture diagnostics for classification while preserving terminal visibility."""
+    result = subprocess.run(command, text=True, stderr=subprocess.PIPE, check=False)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+        sys.stderr.flush()
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            command,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
+    return result
 
 
 def validate_artools_unattended_contract(buildiso_text: str, basestrap_text: str) -> None:
@@ -346,6 +390,14 @@ def chroot(repo: Path, config: dict[str, Any], command: list[str], *, capture: b
     if not is_mountpoint(p["root"]):
         raise RuntimeError("Artix context is not mounted")
     return run(["chroot", str(p["root"]), *command], capture=capture)
+
+
+def chroot_capture_stderr(repo: Path, config: dict[str, Any], command: list[str]) -> subprocess.CompletedProcess[str]:
+    require_root("Artix chroot execution")
+    p = paths(repo, config)
+    if not is_mountpoint(p["root"]):
+        raise RuntimeError("Artix context is not mounted")
+    return run_capture_stderr(["chroot", str(p["root"]), *command])
 
 
 def parse_package_candidates(facts: str) -> dict[str, dict[str, str]]:
@@ -1235,11 +1287,137 @@ def classify_package_acquisition_failure(
     return "runtime_error"
 
 
+def exception_diagnostic_text(error: BaseException) -> str:
+    """Collect bounded diagnostics from one exception chain for stable classification."""
+    parts: list[str] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(seen) < 6:
+        seen.add(id(current))
+        for value in (
+            getattr(current, "stderr", None),
+            getattr(current, "stdout", None),
+            str(current),
+        ):
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+        current = current.__cause__ or current.__context__
+    return "\n".join(parts)[-8000:]
+
+
+def repository_closure_failure_observation(
+    evidence: dict[str, Any],
+    substage: str,
+) -> tuple[dict[str, Any], str | None, str | None]:
+    """Return context, detailed diagnostic, and lower-level failure class for A6."""
+    context: dict[str, Any] = {}
+    detail: str | None = None
+    source_failure_class: str | None = None
+    if substage == "acquisition":
+        attempts = evidence.get("cache", {}).get("prefetch_attempts", [])
+        failed = [attempt for attempt in attempts if isinstance(attempt, dict) and attempt.get("result") == "fail"]
+        if failed:
+            last = failed[-1]
+            context = {
+                "batch": last.get("batch"),
+                "attempt": last.get("attempt"),
+                "mirror": last.get("mirror", {}).get("server") if isinstance(last.get("mirror"), dict) else None,
+            }
+            detail = last.get("detail") if isinstance(last.get("detail"), str) else None
+            source_failure_class = last.get("failure_class") if isinstance(last.get("failure_class"), str) else None
+    elif substage == "repository-sync":
+        attempts = evidence.get("repository_anchor", {}).get("attempts", [])
+        failed = [attempt for attempt in attempts if isinstance(attempt, dict) and attempt.get("result") == "fail"]
+        if failed:
+            last = failed[-1]
+            context = {
+                "mirror": last.get("server"),
+                "mirrorlist_line": last.get("mirrorlist_line"),
+                "attempt": len(failed),
+            }
+            detail = last.get("detail") if isinstance(last.get("detail"), str) else None
+    context = {key: value for key, value in context.items() if value is not None}
+    return context, detail, source_failure_class
+
+
+def classify_repository_closure_failure(
+    substage: str,
+    error: BaseException,
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """Create the structured A6 failure diagnosis for one closure substage."""
+    if substage not in REPOSITORY_CLOSURE_SUBSTAGES:
+        substage = "cache-verification"
+    context, observed_detail, source_failure_class = repository_closure_failure_observation(evidence, substage)
+    diagnostic = exception_diagnostic_text(error)
+    combined = "\n".join(part for part in (observed_detail, diagnostic) if part).lower()
+
+    if isinstance(error, (KeyboardInterrupt, SystemExit)) or source_failure_class == "interrupted":
+        cause = "interrupted"
+    elif "signature" in combined or "pgp" in combined or "unknown trust" in combined:
+        cause = "signature_failure"
+    elif "sha-256 mismatch" in combined or "sha256 mismatch" in combined or "checksum mismatch" in combined:
+        cause = "hash_mismatch"
+    elif "unexpected eof" in combined and ("ssl" in combined or "tls" in combined or "openssl" in combined):
+        cause = "tls_eof"
+    elif "operation too slow" in combined or "timed out" in combined or "timeout" in combined:
+        cause = "timeout"
+    elif "404" in combined or "http_not_found" in combined:
+        cause = "http_404"
+    elif "tls" in combined or "ssl" in combined or "certificate" in combined:
+        cause = "tls_failure"
+    elif "could not resolve" in combined or "name resolution" in combined or "name or service not known" in combined:
+        cause = "dns"
+    elif "connection refused" in combined or "failed to connect" in combined or "could not connect" in combined:
+        cause = "connection"
+    elif substage == "mirror-selection" and (
+        "no active https repository mirrors" in combined or "mirrorlist" in combined
+    ):
+        cause = "no_eligible_mirror" if "no active https" in combined else "mirror_configuration"
+    elif substage == "repository-sync" and (
+        "no healthy artix https anchor" in combined or "missing or empty repository databases" in combined
+    ):
+        cause = "repository_unavailable"
+    elif substage == "resolution" and "omitted explicit targets" in combined:
+        cause = "resolution_incomplete"
+    elif substage == "local-validation" and "different package closure" in combined:
+        cause = "resolution_mismatch"
+    elif "prefetched package file is missing" in combined or "missing package" in combined:
+        cause = "missing_file"
+    elif source_failure_class == "verification_incomplete" or "without producing sha-256-valid files" in combined:
+        cause = "verification_incomplete"
+    elif source_failure_class == "timeout":
+        cause = "timeout"
+    elif source_failure_class == "http_not_found":
+        cause = "http_404"
+    elif source_failure_class == "tls":
+        cause = "tls_failure"
+    elif source_failure_class == "dns":
+        cause = "dns"
+    elif source_failure_class == "connection":
+        cause = "connection"
+    elif source_failure_class == "integrity":
+        cause = "hash_mismatch"
+    elif source_failure_class == "process_failed" or isinstance(error, subprocess.CalledProcessError):
+        cause = "process_failed"
+    else:
+        cause = "runtime_error"
+
+    detail = observed_detail or diagnostic or str(error)
+    return {
+        "substage": substage,
+        "cause": cause,
+        "detail": detail[-1000:],
+        "context": context,
+    }
+
+
 def concise_process_failure(error: subprocess.CalledProcessError) -> str:
     text = (error.stderr or error.stdout or str(error)).strip()
     if not text:
         text = f"exit {error.returncode}"
-    return text.splitlines()[-1][:500]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return " | ".join(lines[-8:])[-1000:]
 
 
 def render_frozen_pacman_config(original: str, local_server: str) -> str:
@@ -1342,6 +1520,7 @@ def prepare_repository_closure(
     validation_db_inside = f"{closure_inside}/validation-db"
     local_server = f"file://{closure_inside}/repo"
     original_config = pacman_config_host.read_text(encoding="utf-8", errors="strict")
+    current_substage = "mirror-selection"
     evidence: dict[str, Any] = {
         "schema_version": 1,
         "run_id": manifest["run_id"],
@@ -1388,6 +1567,7 @@ def prepare_repository_closure(
     }
     try:
         mirror_candidates = parse_artix_mirror_servers(mirrorlist_host.read_text(encoding="utf-8", errors="strict"))
+        current_substage = "repository-sync"
         evidence["repository_anchor"]["candidate_count"] = len(mirror_candidates)
         anchor_config_host = closure_host / "anchor-pacman.conf"
         anchor_config_inside = f"{closure_inside}/anchor-pacman.conf"
@@ -1470,6 +1650,7 @@ def prepare_repository_closure(
         evidence["repository_anchor"]["status"] = "pass"
         write_repository_closure_evidence(manifest_file, evidence)
 
+        current_substage = "resolution"
         resolve_command = [
             "/usr/bin/pacman",
             "-Sp",
@@ -1490,6 +1671,7 @@ def prepare_repository_closure(
 
         freeze_resolved_package_evidence(manifest_file, evidence, packages)
 
+        current_substage = "cache-verification"
         cache_audit = audit_persistent_package_cache(cache_host, packages)
         reconcile_package_progress_from_cache_audit(evidence["package_progress"], cache_audit)
         evidence["progress_summary"] = summarize_package_progress(evidence["package_progress"])
@@ -1523,6 +1705,8 @@ def prepare_repository_closure(
         )
         write_repository_closure_evidence(manifest_file, evidence)
 
+        current_substage = "acquisition"
+
         def fetch_prefetch_batch(batch_index: int, batch: list[dict[str, Any]]) -> None:
             def fetch_mirror_attempt(
                 _attempt_index: int,
@@ -1531,7 +1715,7 @@ def prepare_repository_closure(
             ) -> None:
                 prefetch_config = render_anchor_pacman_config(original_config, mirror["server"])
                 prefetch_config_host.write_text(prefetch_config, encoding="utf-8")
-                chroot(
+                chroot_capture_stderr(
                     repo,
                     native_config,
                     prefetch_pacman_command(
@@ -1590,6 +1774,7 @@ def prepare_repository_closure(
             fetch_prefetch_batch,
             record_prefetch_progress,
         )
+        current_substage = "cache-verification"
         verify_cached_package_files(cache_host, packages)
         for package in packages:
             link = frozen_repo / package["filename"]
@@ -1621,12 +1806,13 @@ def prepare_repository_closure(
             "network_repositories_enabled": False,
         }
 
+        current_substage = "local-validation"
         chroot(
             repo,
             native_config,
             ["/usr/bin/chown", "-R", "alpm:alpm", validation_db_inside],
         )
-        chroot(
+        chroot_capture_stderr(
             repo,
             native_config,
             [
@@ -1657,7 +1843,7 @@ def prepare_repository_closure(
         )
         validation_packages = parse_pacman_print_rows(validation_result.stdout)
         require_same_package_closure(packages, validation_packages)
-        chroot(
+        chroot_capture_stderr(
             repo,
             native_config,
             [
@@ -1679,6 +1865,7 @@ def prepare_repository_closure(
             "package_files_verified": True,
             "network_repositories_enabled": False,
         }
+        current_substage = "cache-verification"
         run(["chown", "-R", f"{outer_cache_uid}:{outer_cache_gid}", str(cache_host)])
         evidence["cache"]["outer_owner_restored"] = True
         run(["mount", "-o", "remount,bind,ro", str(cache_target)])
@@ -1688,7 +1875,7 @@ def prepare_repository_closure(
         write_repository_closure_evidence(manifest_file, evidence)
         return evidence
     except BaseException as error:
-        evidence["failure"] = str(error)
+        evidence["failure"] = classify_repository_closure_failure(current_substage, error, evidence)
         evidence["progress_summary"] = summarize_package_progress(evidence.get("package_progress", []))
         write_repository_closure_evidence(manifest_file, evidence)
         raise
@@ -2594,6 +2781,71 @@ def self_test() -> int:
     assert classify_package_acquisition_failure(not_found_error, {"a"}, concise_process_failure(not_found_error)) == "http_not_found"
     assert classify_package_acquisition_failure(None, {"a"}, None) == "verification_incomplete"
     assert classify_package_acquisition_failure(None, set(), None) is None
+    sync_evidence = {
+        "repository_anchor": {
+            "attempts": [
+                {
+                    "server": "https://mirror.example/artix/$repo/os/$arch",
+                    "mirrorlist_line": 7,
+                    "result": "fail",
+                    "detail": "OpenSSL SSL_read: unexpected eof while reading",
+                }
+            ]
+        },
+        "cache": {"prefetch_attempts": []},
+    }
+    sync_failure = classify_repository_closure_failure(
+        "repository-sync",
+        RuntimeError("no healthy Artix HTTPS anchor supplied system/world/galaxy repository databases"),
+        sync_evidence,
+    )
+    assert sync_failure["substage"] == "repository-sync"
+    assert sync_failure["cause"] == "tls_eof"
+    assert sync_failure["context"]["mirror"].startswith("https://mirror.example/")
+    acquisition_evidence = {
+        "repository_anchor": {"attempts": []},
+        "cache": {
+            "prefetch_attempts": [
+                {
+                    "batch": 3,
+                    "attempt": 2,
+                    "mirror": {"server": "https://fallback.example/artix/$repo/os/$arch"},
+                    "result": "fail",
+                    "failure_class": "http_not_found",
+                    "detail": "failed retrieving file: 404 Not Found",
+                }
+            ]
+        },
+    }
+    acquisition_failure = classify_repository_closure_failure(
+        "acquisition",
+        RuntimeError("package prefetch batch failed"),
+        acquisition_evidence,
+    )
+    assert acquisition_failure["cause"] == "http_404"
+    assert acquisition_failure["context"] == {
+        "batch": 3,
+        "attempt": 2,
+        "mirror": "https://fallback.example/artix/$repo/os/$arch",
+    }
+    hash_failure = classify_repository_closure_failure(
+        "cache-verification",
+        RuntimeError("prefetched package SHA-256 mismatch for fixture.pkg.tar.zst: deadbeef"),
+        {"repository_anchor": {"attempts": []}, "cache": {"prefetch_attempts": []}},
+    )
+    assert hash_failure["cause"] == "hash_mismatch"
+    signature_failure = classify_repository_closure_failure(
+        "local-validation",
+        RuntimeError("invalid or corrupted package (PGP signature)"),
+        {"repository_anchor": {"attempts": []}, "cache": {"prefetch_attempts": []}},
+    )
+    assert signature_failure["cause"] == "signature_failure"
+    mirror_failure = classify_repository_closure_failure(
+        "mirror-selection",
+        RuntimeError("Artix mirrorlist contains no active HTTPS repository mirrors"),
+        {"repository_anchor": {"attempts": []}, "cache": {"prefetch_attempts": []}},
+    )
+    assert mirror_failure["cause"] == "no_eligible_mirror"
     prefetch_command_fixture = prefetch_pacman_command(
         "/run/prefetch.conf",
         "/run/pacman-db",
