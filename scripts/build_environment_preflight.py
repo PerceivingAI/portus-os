@@ -731,6 +731,7 @@ def build_checks(repo: Path, config: dict[str, Any], config_path: Path, config_s
         "PACKAGE_PREFETCH_MAX_MIRROR_ATTEMPTS",
         "prefetch_pacman_command(",
         "acquire_batch_with_mirror_failover(",
+        "audit_persistent_package_cache(",
         'local_server = f"file://{closure_inside}/repo"',
     )
     closure_gate = all(marker in context_text for marker in closure_markers)

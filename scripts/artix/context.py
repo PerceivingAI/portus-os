@@ -885,6 +885,73 @@ def acquire_prefetch_batches(
     return verified
 
 
+def remove_cache_entry(path: Path, label: str) -> bool:
+    """Remove one cache file/symlink, but never recursively remove an unexpected directory."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return True
+    if path.exists():
+        raise RuntimeError(f"unexpected directory or special entry at {label}: {path}")
+    return False
+
+
+def audit_persistent_package_cache(cache: Path, packages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Reconcile the persistent package cache against one frozen package closure."""
+    reused: list[str] = []
+    pending: list[str] = []
+    corrupt_removed: list[str] = []
+    stale_partial_removed: list[str] = []
+    expected_filenames: set[str] = set()
+
+    for package in sorted(packages, key=lambda entry: entry["filename"]):
+        filename = package["filename"]
+        if filename in expected_filenames:
+            raise RuntimeError(f"duplicate package filename in frozen closure: {filename}")
+        expected_filenames.add(filename)
+        cached = cache / filename
+        valid = False
+        if cached.is_symlink() or cached.exists():
+            if cached.is_symlink() or not cached.is_file():
+                if remove_cache_entry(cached, "package cache archive"):
+                    corrupt_removed.append(filename)
+                signature = cache / f"{filename}.sig"
+                if remove_cache_entry(signature, "package cache signature"):
+                    corrupt_removed.append(signature.name)
+            elif sha256_file(cached) == package["sha256"]:
+                valid = True
+                reused.append(filename)
+            else:
+                if remove_cache_entry(cached, "package cache archive"):
+                    corrupt_removed.append(filename)
+                signature = cache / f"{filename}.sig"
+                if remove_cache_entry(signature, "package cache signature"):
+                    corrupt_removed.append(signature.name)
+
+        for partial_name in (f"{filename}.part", f"{filename}.sig.part"):
+            partial = cache / partial_name
+            if remove_cache_entry(partial, "stale package cache partial"):
+                stale_partial_removed.append(partial_name)
+
+        if not valid:
+            pending.append(filename)
+
+    reused_set = set(reused)
+    pending_set = set(pending)
+    if reused_set & pending_set or reused_set | pending_set != expected_filenames:
+        raise RuntimeError("persistent package cache audit did not partition the frozen closure")
+
+    return {
+        "status": "pass",
+        "resolved_count": len(packages),
+        "reused_count": len(reused),
+        "reused_filenames": reused,
+        "pending_count": len(pending),
+        "pending_filenames": pending,
+        "corrupt_entries_removed": sorted(corrupt_removed),
+        "stale_partial_entries_removed": sorted(stale_partial_removed),
+    }
+
+
 def verified_cached_filenames(cache: Path, packages: list[dict[str, Any]]) -> set[str]:
     verified: set[str] = set()
     for package in packages:
@@ -1073,9 +1140,11 @@ def prepare_repository_closure(
         "packages": [],
         "cache": {
             "path": PACKAGE_CACHE_PATH.as_posix(),
+            "audit": None,
             "reused_count": 0,
             "downloaded_or_recovered_count": 0,
             "corrupt_entries_removed": [],
+            "stale_partial_entries_removed": [],
             "verified_count": 0,
             "read_only_for_buildiso": False,
             "outer_owner_restored": False,
@@ -1188,23 +1257,15 @@ def prepare_repository_closure(
 
         freeze_resolved_package_evidence(manifest_file, evidence, packages)
 
-        reused_count = 0
-        corrupt_removed: list[str] = []
-        cache_valid_before: set[str] = set()
-        for package in packages:
-            cached = cache_host / package["filename"]
-            if not cached.exists():
-                continue
-            if not cached.is_file() or sha256_file(cached) != package["sha256"]:
-                cached.unlink()
-                corrupt_removed.append(package["filename"])
-                continue
-            cache_valid_before.add(package["filename"])
-            reused_count += 1
-
+        cache_audit = audit_persistent_package_cache(cache_host, packages)
+        cache_valid_before = set(cache_audit["reused_filenames"])
+        reused_count = cache_audit["reused_count"]
+        pending_filenames = set(cache_audit["pending_filenames"])
         pending_packages = [
-            package for package in packages if package["filename"] not in cache_valid_before
+            package for package in packages if package["filename"] in pending_filenames
         ]
+        if len(pending_packages) != cache_audit["pending_count"]:
+            raise RuntimeError("persistent package cache audit pending identities do not match frozen closure")
         prefetch_batches = plan_package_prefetch_batches(pending_packages)
         prefetch_mirrors = ordered_prefetch_mirrors(mirror_candidates, selected_anchor)
         prefetch_config_host = closure_host / "prefetch-pacman.conf"
@@ -1212,8 +1273,10 @@ def prepare_repository_closure(
         prefetched_verified: set[str] = set()
         evidence["cache"].update(
             {
+                "audit": copy.deepcopy(cache_audit),
                 "reused_count": reused_count,
-                "corrupt_entries_removed": sorted(corrupt_removed),
+                "corrupt_entries_removed": copy.deepcopy(cache_audit["corrupt_entries_removed"]),
+                "stale_partial_entries_removed": copy.deepcopy(cache_audit["stale_partial_entries_removed"]),
                 "prefetch_batch_limit_bytes": PACKAGE_PREFETCH_BATCH_LIMIT_BYTES,
                 "prefetch_batch_count": len(prefetch_batches),
                 "prefetch_completed_batch_count": 0,
@@ -1298,7 +1361,8 @@ def prepare_repository_closure(
             {
                 "reused_count": reused_count,
                 "downloaded_or_recovered_count": len(packages) - reused_count,
-                "corrupt_entries_removed": sorted(corrupt_removed),
+                "corrupt_entries_removed": copy.deepcopy(cache_audit["corrupt_entries_removed"]),
+                "stale_partial_entries_removed": copy.deepcopy(cache_audit["stale_partial_entries_removed"]),
                 "verified_count": len(packages),
                 "prefetch_pending_count": 0,
                 "read_only_for_buildiso": False,
@@ -2104,6 +2168,91 @@ def self_test() -> int:
             pass
         else:
             raise AssertionError("corrupt package cache entry must fail closed")
+    with tempfile.TemporaryDirectory(prefix="portus-artix-cache-audit-self-test-") as raw_cache_audit:
+        cache_audit_root = Path(raw_cache_audit)
+        reused_bytes = b"reused-package"
+        corrupt_bytes = b"expected-corrupt-package"
+        missing_bytes = b"missing-package"
+        audit_packages = [
+            {
+                "repository": "system",
+                "name": "reused",
+                "version": "1-1",
+                "filename": "reused-1-1-any.pkg.tar.zst",
+                "sha256": hashlib.sha256(reused_bytes).hexdigest(),
+                "size_bytes": len(reused_bytes),
+            },
+            {
+                "repository": "world",
+                "name": "corrupt",
+                "version": "1-1",
+                "filename": "corrupt-1-1-any.pkg.tar.zst",
+                "sha256": hashlib.sha256(corrupt_bytes).hexdigest(),
+                "size_bytes": len(corrupt_bytes),
+            },
+            {
+                "repository": "galaxy",
+                "name": "missing",
+                "version": "1-1",
+                "filename": "missing-1-1-any.pkg.tar.zst",
+                "sha256": hashlib.sha256(missing_bytes).hexdigest(),
+                "size_bytes": len(missing_bytes),
+            },
+        ]
+        (cache_audit_root / audit_packages[0]["filename"]).write_bytes(reused_bytes)
+        (cache_audit_root / audit_packages[1]["filename"]).write_bytes(b"wrong-bytes")
+        (cache_audit_root / f"{audit_packages[1]['filename']}.sig").write_bytes(b"stale-signature")
+        (cache_audit_root / f"{audit_packages[2]['filename']}.part").write_bytes(b"stale-partial")
+        (cache_audit_root / f"{audit_packages[2]['filename']}.sig.part").write_bytes(b"stale-signature-partial")
+        cache_audit = audit_persistent_package_cache(cache_audit_root, audit_packages)
+        assert cache_audit["status"] == "pass"
+        assert cache_audit["resolved_count"] == 3
+        assert cache_audit["reused_count"] == 1
+        assert cache_audit["reused_filenames"] == [audit_packages[0]["filename"]]
+        assert cache_audit["pending_count"] == 2
+        assert cache_audit["pending_filenames"] == [
+            audit_packages[1]["filename"],
+            audit_packages[2]["filename"],
+        ]
+        assert cache_audit["corrupt_entries_removed"] == [
+            audit_packages[1]["filename"],
+            f"{audit_packages[1]['filename']}.sig",
+        ]
+        assert cache_audit["stale_partial_entries_removed"] == [
+            f"{audit_packages[2]['filename']}.part",
+            f"{audit_packages[2]['filename']}.sig.part",
+        ]
+        assert (cache_audit_root / audit_packages[0]["filename"]).is_file()
+        assert not (cache_audit_root / audit_packages[1]["filename"]).exists()
+        assert not (cache_audit_root / f"{audit_packages[1]['filename']}.sig").exists()
+        assert not (cache_audit_root / f"{audit_packages[2]['filename']}.part").exists()
+
+        duplicate_audit_packages = [audit_packages[0], copy.deepcopy(audit_packages[0])]
+        try:
+            audit_persistent_package_cache(cache_audit_root, duplicate_audit_packages)
+        except RuntimeError as error:
+            assert "duplicate package filename" in str(error)
+        else:
+            raise AssertionError("duplicate frozen package filenames must fail cache audit closed")
+
+    with tempfile.TemporaryDirectory(prefix="portus-artix-cache-audit-dir-self-test-") as raw_cache_dir:
+        cache_dir_root = Path(raw_cache_dir)
+        directory_package = {
+            "repository": "system",
+            "name": "directory",
+            "version": "1-1",
+            "filename": "directory-1-1-any.pkg.tar.zst",
+            "sha256": "0" * 64,
+            "size_bytes": 1,
+        }
+        (cache_dir_root / directory_package["filename"]).mkdir()
+        try:
+            audit_persistent_package_cache(cache_dir_root, [directory_package])
+        except RuntimeError as error:
+            assert "unexpected directory or special entry" in str(error)
+        else:
+            raise AssertionError("unexpected directory in package cache must fail audit closed")
+
     batch_fixture = [
         {
             "repository": "world",

@@ -334,6 +334,40 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
             or cache.get("verified_count") != len(report["packages"])
         ):
             raise ValueError("passing repository closure report did not prove a verified read-only build cache with restored outer ownership")
+        cache_audit = cache.get("audit")
+        if not isinstance(cache_audit, dict) or cache_audit.get("status") != "pass":
+            raise ValueError("passing repository closure report lacks a successful persistent-cache audit")
+        reused_filenames = cache_audit.get("reused_filenames")
+        pending_filenames = cache_audit.get("pending_filenames")
+        if (
+            not isinstance(reused_filenames, list)
+            or not all(isinstance(filename, str) and filename for filename in reused_filenames)
+            or len(set(reused_filenames)) != len(reused_filenames)
+            or not isinstance(pending_filenames, list)
+            or not all(isinstance(filename, str) and filename for filename in pending_filenames)
+            or len(set(pending_filenames)) != len(pending_filenames)
+            or set(reused_filenames) & set(pending_filenames)
+            or cache_audit.get("resolved_count") != len(report["packages"])
+            or cache_audit.get("reused_count") != len(reused_filenames)
+            or cache_audit.get("pending_count") != len(pending_filenames)
+            or cache.get("reused_count") != len(reused_filenames)
+            or not isinstance(cache_audit.get("corrupt_entries_removed"), list)
+            or not isinstance(cache_audit.get("stale_partial_entries_removed"), list)
+        ):
+            raise ValueError("passing repository closure report contains an invalid persistent-cache audit")
+        package_filenames: set[str] = set()
+        reused_filename_set = set(reused_filenames)
+        for package in report["packages"]:
+            if not isinstance(package, dict) or not isinstance(package.get("filename"), str) or not package["filename"]:
+                raise ValueError("passing repository closure report contains a package without a filename")
+            filename = package["filename"]
+            if filename in package_filenames:
+                raise ValueError("passing repository closure report contains duplicate package filenames")
+            package_filenames.add(filename)
+            if package.get("cached_before") is not (filename in reused_filename_set):
+                raise ValueError("passing repository closure package cached_before state disagrees with cache audit")
+        if package_filenames != reused_filename_set | set(pending_filenames):
+            raise ValueError("passing repository closure cache audit does not partition the frozen package closure")
         mirror_limit = cache.get("prefetch_mirror_attempt_limit")
         prefetch_mirrors = cache.get("prefetch_mirrors")
         prefetch_attempts = cache.get("prefetch_attempts")
@@ -767,9 +801,20 @@ def self_test() -> int:
                 "pacman_config_sha256": "e" * 64,
             },
             "repositories": [{"name": name} for name in ("system", "world", "galaxy")],
-            "packages": [{"name": "base"}],
+            "packages": [{"name": "base", "filename": "base-1-1-x86_64.pkg.tar.zst", "cached_before": False}],
             "cache": {
                 "path": "portusos-build/cache/artix-packages",
+                "audit": {
+                    "status": "pass",
+                    "resolved_count": 1,
+                    "reused_count": 0,
+                    "reused_filenames": [],
+                    "pending_count": 1,
+                    "pending_filenames": ["base-1-1-x86_64.pkg.tar.zst"],
+                    "corrupt_entries_removed": [],
+                    "stale_partial_entries_removed": [],
+                },
+                "reused_count": 0,
                 "verified_count": 1,
                 "prefetch_batch_count": 1,
                 "prefetch_completed_batch_count": 1,
@@ -799,6 +844,37 @@ def self_test() -> int:
             "failure": None,
         }
         assert validate_repository_closure_report(closure_fixture, "run-1") == "pass"
+        all_reused_fixture = copy.deepcopy(closure_fixture)
+        all_reused_fixture["packages"][0]["cached_before"] = True
+        all_reused_fixture["cache"]["audit"].update(
+            {
+                "reused_count": 1,
+                "reused_filenames": ["base-1-1-x86_64.pkg.tar.zst"],
+                "pending_count": 0,
+                "pending_filenames": [],
+            }
+        )
+        all_reused_fixture["cache"]["reused_count"] = 1
+        all_reused_fixture["cache"]["prefetch_batch_count"] = 0
+        all_reused_fixture["cache"]["prefetch_completed_batch_count"] = 0
+        all_reused_fixture["cache"]["prefetch_attempts"] = []
+        assert validate_repository_closure_report(all_reused_fixture, "run-1") == "pass"
+        closure_fixture["cache"]["audit"]["pending_filenames"] = []
+        try:
+            validate_repository_closure_report(closure_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("repository closure evidence must fail closed on an incomplete cache-audit partition")
+        closure_fixture["cache"]["audit"]["pending_filenames"] = ["base-1-1-x86_64.pkg.tar.zst"]
+        closure_fixture["packages"][0]["cached_before"] = True
+        try:
+            validate_repository_closure_report(closure_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("repository closure evidence must fail closed when cached_before disagrees with cache audit")
+        closure_fixture["packages"][0]["cached_before"] = False
         closure_fixture["repository_anchor"]["database_sync_locked"] = False
         try:
             validate_repository_closure_report(closure_fixture, "run-1")
