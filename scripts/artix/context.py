@@ -632,8 +632,60 @@ def verify_cached_package_files(cache: Path, packages: list[dict[str, Any]]) -> 
             )
 
 
+def parse_artix_mirror_servers(text: str) -> list[dict[str, Any]]:
+    """Return active HTTPS Artix mirror templates in mirrorlist order."""
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line_number, raw in enumerate(text.splitlines(), start=1):
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = re.fullmatch(r"Server\s*=\s*(\S+)", stripped)
+        if match is None:
+            continue
+        server = match.group(1)
+        if not server.startswith("https://"):
+            continue
+        if "$repo" not in server or "$arch" not in server:
+            raise RuntimeError(f"active HTTPS Artix mirror lacks $repo/$arch placeholders at line {line_number}")
+        if server in seen:
+            continue
+        seen.add(server)
+        candidates.append({"server": server, "mirrorlist_line": line_number})
+    if not candidates:
+        raise RuntimeError("Artix mirrorlist contains no active HTTPS repository mirrors")
+    return candidates
+
+
+def select_first_healthy_mirror(candidates: list[dict[str, Any]], probe: Any) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Select the first mirror whose probe proves all locked repositories usable."""
+    attempts: list[dict[str, Any]] = []
+    for candidate in candidates:
+        ok, detail = probe(candidate)
+        attempt = copy.deepcopy(candidate)
+        attempt["result"] = "pass" if ok else "fail"
+        attempt["detail"] = detail
+        attempts.append(attempt)
+        if ok:
+            return copy.deepcopy(candidate), attempts
+    return None, attempts
+
+
+def render_anchor_pacman_config(original: str, server_template: str) -> str:
+    if not server_template.startswith("https://") or "$repo" not in server_template or "$arch" not in server_template:
+        raise RuntimeError("Artix repository anchor must be an HTTPS mirror template containing $repo and $arch")
+    return render_frozen_pacman_config(original, server_template)
+
+
+def concise_process_failure(error: subprocess.CalledProcessError) -> str:
+    text = (error.stderr or error.stdout or str(error)).strip()
+    if not text:
+        text = f"exit {error.returncode}"
+    return text.splitlines()[-1][:500]
+
+
 def render_frozen_pacman_config(original: str, local_server: str) -> str:
-    """Retain locked pacman options but replace rolling mirrors with one local run snapshot."""
+    """Retain locked pacman options but replace repository sources with one server."""
     lines = original.splitlines()
     first_repo = None
     enabled_repositories: list[str] = []
@@ -748,6 +800,13 @@ def prepare_repository_closure(
             "path": "/etc/pacman.d/mirrorlist",
             "sha256": sha256_file(mirrorlist_host),
         },
+        "repository_anchor": {
+            "status": "pending",
+            "selected": None,
+            "attempts": [],
+            "candidate_count": 0,
+            "database_sync_locked": False,
+        },
         "repositories": [],
         "packages": [],
         "cache": {
@@ -764,19 +823,73 @@ def prepare_repository_closure(
         "failure": None,
     }
     try:
-        chroot(
-            repo,
-            native_config,
-            ["/usr/bin/pacman", "-Syy", "--noconfirm", "--config", pacman_config],
+        mirror_candidates = parse_artix_mirror_servers(mirrorlist_host.read_text(encoding="utf-8", errors="strict"))
+        evidence["repository_anchor"]["candidate_count"] = len(mirror_candidates)
+        anchor_config_host = closure_host / "anchor-pacman.conf"
+        anchor_config_inside = f"{closure_inside}/anchor-pacman.conf"
+        chroot(repo, native_config, ["/usr/bin/chown", "-R", "alpm:alpm", closure_db_inside])
+
+        def probe_anchor(candidate: dict[str, Any]) -> tuple[bool, str | None]:
+            sync_dir = closure_db / "sync"
+            lock_file = closure_db / "db.lck"
+            if lock_file.exists():
+                lock_file.unlink()
+            for item in tuple(sync_dir.iterdir()):
+                if item.is_dir() and not item.is_symlink():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+            anchor_config = render_anchor_pacman_config(original_config, candidate["server"])
+            anchor_config_host.write_text(anchor_config, encoding="utf-8")
+            try:
+                chroot(
+                    repo,
+                    native_config,
+                    [
+                        "/usr/bin/pacman",
+                        "-Syy",
+                        "--noconfirm",
+                        "--config",
+                        anchor_config_inside,
+                        "--dbpath",
+                        closure_db_inside,
+                    ],
+                    capture=True,
+                )
+            except subprocess.CalledProcessError as error:
+                return False, concise_process_failure(error)
+            missing = [
+                repository
+                for repository in FROZEN_REPOSITORIES
+                if not (sync_dir / f"{repository}.db").is_file()
+                or (sync_dir / f"{repository}.db").stat().st_size <= 0
+            ]
+            if missing:
+                return False, "missing or empty repository databases: " + ", ".join(missing)
+            return True, None
+
+        selected_anchor, anchor_attempts = select_first_healthy_mirror(mirror_candidates, probe_anchor)
+        evidence["repository_anchor"]["attempts"] = anchor_attempts
+        if selected_anchor is None:
+            evidence["repository_anchor"]["status"] = "fail"
+            write_repository_closure_evidence(manifest_file, evidence)
+            raise RuntimeError("no healthy Artix HTTPS anchor supplied system/world/galaxy repository databases")
+
+        anchor_config = anchor_config_host.read_text(encoding="utf-8", errors="strict")
+        evidence["repository_anchor"].update(
+            {
+                "status": "selected",
+                "selected": selected_anchor,
+                "pacman_config_path": anchor_config_inside,
+                "pacman_config_sha256": hashlib.sha256(anchor_config.encode("utf-8")).hexdigest(),
+            }
         )
-        sync_dir = p["root"] / "var/lib/pacman/sync"
         repository_records: list[dict[str, Any]] = []
+        sync_dir = closure_db / "sync"
         for repository in FROZEN_REPOSITORIES:
             source_db = sync_dir / f"{repository}.db"
-            if not source_db.is_file():
-                raise RuntimeError(f"fresh Artix repository database is missing: {repository}.db")
-            for destination in (closure_db / "sync" / f"{repository}.db", frozen_repo / f"{repository}.db"):
-                shutil.copy2(source_db, destination)
+            destination = frozen_repo / f"{repository}.db"
+            shutil.copy2(source_db, destination)
             repository_records.append(
                 {
                     "name": repository,
@@ -785,12 +898,19 @@ def prepare_repository_closure(
                 }
             )
         evidence["repositories"] = repository_records
+        for item in sync_dir.iterdir():
+            if item.is_file() or item.is_symlink():
+                item.chmod(0o444)
+        sync_dir.chmod(0o555)
+        evidence["repository_anchor"]["database_sync_locked"] = True
+        evidence["repository_anchor"]["status"] = "pass"
+        write_repository_closure_evidence(manifest_file, evidence)
 
         resolve_command = [
             "/usr/bin/pacman",
             "-Sp",
             "--config",
-            pacman_config,
+            anchor_config_inside,
             "--dbpath",
             closure_db_inside,
             "--print-format",
@@ -1654,6 +1774,49 @@ def self_test() -> int:
             pass
         else:
             raise AssertionError("corrupt package cache entry must fail closed")
+    mirror_fixture = (
+        "# disabled\n"
+        "#Server = https://disabled.example/$repo/os/$arch\n"
+        "Server = http://legacy.example/$repo/os/$arch\n"
+        "Server = https://first.example/artix/$repo/os/$arch\n"
+        "Server = https://second.example/artix/$repo/os/$arch\n"
+        "Server = https://first.example/artix/$repo/os/$arch\n"
+    )
+    mirror_candidates = parse_artix_mirror_servers(mirror_fixture)
+    assert mirror_candidates == [
+        {"server": "https://first.example/artix/$repo/os/$arch", "mirrorlist_line": 4},
+        {"server": "https://second.example/artix/$repo/os/$arch", "mirrorlist_line": 5},
+    ]
+    selected_mirror, mirror_attempts = select_first_healthy_mirror(
+        mirror_candidates,
+        lambda candidate: (
+            True,
+            None,
+        )
+        if candidate["server"].startswith("https://second.")
+        else (False, "simulated unhealthy"),
+    )
+    assert selected_mirror == mirror_candidates[1]
+    assert [attempt["result"] for attempt in mirror_attempts] == ["fail", "pass"]
+    assert mirror_attempts[1]["detail"] is None
+    no_mirror, failed_mirror_attempts = select_first_healthy_mirror(
+        mirror_candidates,
+        lambda candidate: (False, f"simulated failure for {candidate['server']}"),
+    )
+    assert no_mirror is None
+    assert len(failed_mirror_attempts) == len(mirror_candidates)
+    try:
+        parse_artix_mirror_servers("Server = https://invalid.example/artix/system/os/x86_64\n")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("active HTTPS mirror without $repo/$arch placeholders must fail closed")
+    anchor_fixture = render_anchor_pacman_config(
+        "[options]\nSigLevel = Required DatabaseOptional\n\n[system]\nInclude = /etc/pacman.d/mirrorlist\n\n[world]\nInclude = /etc/pacman.d/mirrorlist\n\n[galaxy]\nInclude = /etc/pacman.d/mirrorlist\n",
+        "https://anchor.example/artix/$repo/os/$arch",
+    )
+    assert "Include = /etc/pacman.d/mirrorlist" not in anchor_fixture
+    assert anchor_fixture.count("Server = https://anchor.example/artix/$repo/os/$arch") == 3
     frozen_fixture = render_frozen_pacman_config(
         "[options]\nSigLevel = Required DatabaseOptional\n\n[system]\nInclude = /etc/pacman.d/mirrorlist\n\n[world]\nInclude = /etc/pacman.d/mirrorlist\n\n[galaxy]\nInclude = /etc/pacman.d/mirrorlist\n",
         "file:///run/portus-build/repository-closure/repo",

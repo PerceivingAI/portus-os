@@ -1,7 +1,7 @@
 # PortusOS Package and Supply-Chain Policy
 
-**Last reviewed:** 2026-08-29T08:11:30Z
-**Last updated:** 2026-08-29T08:11:30Z
+**Last reviewed:** 2026-08-29T08:21:00Z
+**Last updated:** 2026-08-29T08:21:00Z
 
 **Status:** Authoritative for the locked first-ISO package-source boundary and top-level package inventory; candidate versions/repository lock, remaining profile decisions and candidate redistribution/installed evidence still require verification
 **Target:** First accepted x86_64 VMware development ISO
@@ -57,7 +57,7 @@ Canonical run `20260829T063320Z-658f8230fa32-dev-first-live` demonstrated that s
 
 The closure architecture is implemented, and canonical run `20260829T072729Z-4164361b115a-dev-first-live` proved its repository-synchronization and resolution boundary. The run freshly synchronized the locked stable `system`, `world` and `galaxy` repositories, captured their database SHA-256 values, and resolved an exact 667-package dependency graph requiring about 1469.51 MiB of downloads. It then failed during the initial bulk `pacman -Sw` acquisition because multiple mirrors hit low-speed timeouts or TLS EOFs. `buildiso` was never started, which is the intended fail-closed behavior.
 
-This run narrows the remaining defect to acquisition resilience rather than closure identity. PortusOS must retain the freshly resolved exact package identities while acquiring them in bounded resumable units, verify each completed archive by the repository SHA-256 before reuse, and use a controlled mirror selection/failover policy rather than depending on one monolithic transaction across a heterogeneous mirrorlist. Failed-run evidence now preserves the resolved package graph before acquisition starts: A0 writes the exact repository/name/version/filename/SHA-256/size identities to `repository-closure.json` immediately after resolution, so a later download failure cannot erase the closure. The remaining evidence work is to accurately report verified/reused/downloaded/corrupt/missing cache state when acquisition stops early. The persistent cache from the failed run retained substantial valid payload; that work should be reusable after exact-hash verification rather than discarded. Retrying arbitrary mirrors while changing repository state remains unsupported.
+This run narrows the remaining defect to acquisition resilience rather than closure identity. A0 preserves the resolved graph before acquisition begins. A1 now removes cross-mirror database ambiguity: active HTTPS servers are parsed from the official Artix mirrorlist in order, and a candidate is accepted only if pacman can synchronize `system`, `world` and `galaxy` from that same server into the empty per-run DB. The selected anchor, mirrorlist line, attempt results, generated single-server pacman-config hash and all three repository DB hashes are recorded. The per-run sync directory is then made read-only, so the anchored repository universe cannot be refreshed later in that run. PortusOS still must acquire those frozen identities in bounded resumable units, verify each completed archive by repository SHA-256 before reuse, apply controlled package-mirror failover without changing the frozen DB universe, and accurately report verified/reused/downloaded/corrupt/missing cache state when acquisition stops early. The persistent cache from the failed run retained substantial valid payload; that work should be reusable after exact-hash verification rather than discarded. Retrying arbitrary mirrors while changing repository state remains unsupported.
 
 ## 3. AUR boundary
 
