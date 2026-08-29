@@ -1,10 +1,10 @@
 # PortusOS ISO Build Harness
 
-**Last reviewed:** 2026-08-29T06:31:18Z
+**Last reviewed:** 2026-08-29T07:00:35Z
 
 **Status:** Authoritative for repeated PortusOS ISO build orchestration, build-configuration semantics, per-attempt logging/metadata, artifact capture, and the handoff from repository source to the native Artix ISO adapter.
 
-**Last reconciled:** 2026-08-29T06:31:18Z
+**Last reconciled:** 2026-08-29T07:00:35Z
 
 **ISO architecture authority:** `docs/ISO_BUILD_INSTALLER.md`
 
@@ -634,7 +634,7 @@ Credentials needed after boot are provisioned through their own runtime/setup bo
 
 The config-driven iteration harness and **native Artix execution path are implemented**. The repository knows the verified isolated context, `artools 0.39.1-1` interface, `portus` profile layout, fixed `buildiso` arguments, selected package set, OpenRC service identities, live-session path, expected ISO output naming, run-scoped privilege boundary, and cleanup proof contract.
 
-The current implementation frontier is **late native bootfs/final-ISO construction**, not adapter discovery, payload staging, or native process invocation. Public-repository run `20260829T060019Z-3afadb080c36-dev-first-live` on source commit `3afadb0` reached real `buildiso`, completed rootfs/livefs package installation, retained both installed kernels, generated installed initramfs artifacts, selected `linux-lts` for the live kernel, and generated its live initramfs. At that run revision, `buildiso` then exited nonzero while assembling bootfs because it attempted to copy `/run/artools/livefs/boot/memtest86+/memtest.bin`, which the then-current boot package set did not provide. The package contract has since been corrected to include the verified official Artix `memtest86+` provider; a new native run is still required to prove the corrected path. `native-cleanup.json` from the failed run passed with zero current-run mount/process/seed-loop leakage and removal of the run-scoped Artix context.
+The current implementation frontier is **repository/package closure before late native bootfs/final-ISO construction**, not adapter discovery, payload staging, sudo handoff, or native process invocation. Public-repository run `20260829T060019Z-3afadb080c36-dev-first-live` on source commit `3afadb0` reached real `buildiso`, completed rootfs/livefs package installation, retained both installed kernels, generated installed initramfs artifacts, selected `linux-lts` for the live kernel, and generated its live initramfs before exposing the missing memtest boot input. The package contract was then corrected to include the verified official Artix `memtest86+` provider. The next canonical run, `20260829T063320Z-658f8230fa32-dev-first-live` on source commit `658f823`, did not reach that bootfs seam: it completed the main rootfs transaction and then failed in `make_livefs()` while retrieving Calamares/KDE dependencies because the cloned prepared pacman database requested package identities no longer present on current mirrors. Direct comparison proved `libopenmpt 0.8.8-1` in the run database versus `0.8.9-1` on the current official Artix `world` mirror. Both failed runs produced passing `native-cleanup.json` evidence with zero current-run mount/process/seed-loop leakage and removal of their run-scoped Artix contexts.
 
 The supported progression is therefore:
 
@@ -645,6 +645,8 @@ config/source capture
   -> configured repository tests
   -> contract report + build plan
   -> run-owned Artix workspace/profile/payload staging
+  -> native-boundary Artix repository metadata refresh/freeze
+  -> exact package dependency closure + package-file availability/prefetch proof
   -> native buildiso inside the verified Artix context
   -> rootfs/livefs + installed dual-kernel initramfs
   -> linux-lts live initramfs
@@ -655,5 +657,7 @@ config/source capture
 ```
 
 The memtest correction is now locked: official Artix `memtest86+ 7.20-2` was inspected directly and supplies `/boot/memtest86+/memtest.bin`, so the package is included in both the package contract and `packages-boot`. `portus-build` rejects an `artools 0.39.1` boot profile that omits it. Do not replace this with an untracked file or manual build-root mutation; the next canonical native run is the proof that the tracked dependency closes this seam.
+
+The repository-closure defect is now equally concrete. A prepared Artix context may remain reusable for tools/keyrings/configuration, but its pacman synchronization state must not be treated as indefinitely fresh build input. Before `buildiso` starts, the supported harness must establish one coherent repository/package closure for that run: refresh or otherwise freeze the repository databases at the native boundary, record their identity/hashes, resolve the exact transitive package set required by rootfs and livefs, and verify or prefetch those package files before the expensive construction phase proceeds. A stale database paired with newer rolling mirrors is a build-contract failure, not a reason to retry arbitrary mirrors until one happens to retain an old package.
 
 Blocked and failed runs remain valid build-history records and should remain inspectable. The config-driven entry point remains the normal interface; callers must not learn or maintain a separate manual `buildiso` sequence. The privileged cleanup contract removes the run-scoped Artix context and proves no leaked mounts/process references/seed loops, but failed `artools` construction may still leave root-owned run workspace/chroot data for diagnosis. Reclaim such failed-run disk usage only after proving no live references and preserving the run ledger/evidence required for regression analysis.

@@ -1,7 +1,7 @@
 # PortusOS Package and Supply-Chain Policy
 
-**Last reviewed:** 2026-08-29T06:31:18Z
-**Last updated:** 2026-08-29T06:31:18Z
+**Last reviewed:** 2026-08-29T07:00:35Z
+**Last updated:** 2026-08-29T07:00:35Z
 
 **Status:** Authoritative for the locked first-ISO package-source boundary and top-level package inventory; candidate versions/repository lock, remaining profile decisions and candidate redistribution/installed evidence still require verification
 **Target:** First accepted x86_64 VMware development ISO
@@ -50,6 +50,12 @@ Artix package licence metadata: GPL2
 Because the official package supplies the exact file expected by the locked `artools` path, PortusOS resolves this failure by tracking `memtest86+` as a first-ISO boot input. It is present in `portusos-build/packages/packages.yaml` and in the `packages-boot` section of the locked artools profile. The build validator fails closed if that boot package is later removed.
 
 This is the preferred package-policy outcome: use the verified official Artix package that satisfies the build/runtime contract rather than creating a placeholder file or patching upstream tooling to ignore a required asset. The observed `7.20-2` identity is current build evidence, not yet the final candidate package lock; the exact candidate identity and licence/redistribution evidence still belong in generated `packages.lock.yaml` and the R8 audit.
+
+### 2.2 Rolling-repository closure evidence
+
+Canonical run `20260829T063320Z-658f8230fa32-dev-first-live` demonstrated that successful synchronization during preparation is not sufficient for a later native build against rolling Artix mirrors. The run cloned a prepared pacman database that resolved `libopenmpt 0.8.8-1`; when `make_livefs()` later fetched its Calamares/KDE dependency set, the current official `world` mirror carried `libopenmpt 0.8.9-1` instead. The stale identity therefore produced widespread 404 responses, mixed with unrelated slow-mirror errors, and the livefs transaction failed before bootfs construction.
+
+PortusOS therefore requires repository metadata and package files to form one coherent native-run input set. Before expensive `buildiso` construction begins, the supported path must refresh or freeze the selected official Artix repository databases at the native boundary, record their identity, resolve the exact transitive package closure required by both rootfs and livefs, and verify or prefetch the corresponding package files. A reusable prepared context may retain tooling/keyring/configuration state, but its old pacman sync database must not silently become authoritative after rolling mirrors have advanced. Retrying arbitrary mirrors is not a reproducibility mechanism.
 
 ## 3. AUR boundary
 
@@ -173,12 +179,15 @@ The first-ISO package/build system must preserve these invariants:
 - no developer-machine convenience package silently promoted into the supported image;
 - no manual post-install copying used to satisfy a blocking first-ISO component;
 - package/source provenance remains inspectable from repository-owned configuration and build metadata;
+- the repository database used to resolve a native run must be coherent with the package files consumed by that same run; stale prepared pacman metadata may not be paired with newer rolling-mirror contents;
+- the exact transitive native package closure must be verified or prefetched before expensive ISO construction is allowed to depend on it;
 - a missing package fails clearly or triggers a documented component decision rather than silently changing source.
 
 ## 11. Remaining decisions and verification
 
 The following remain open:
 
+- implementation and native proof of the required per-run repository metadata refresh/freeze, database identity capture, exact transitive package closure and package-file availability/prefetch gate;
 - final candidate repository/mirror snapshot identity and exact package versions;
 - generation of the now-defined multi-artifact `portusos-build/packages/packages.lock.yaml`, followed by verification against `portusos-build/schemas/package-lock.schema.json`;
 - candidate/install proof of the implemented Portus local-package and frozen external-component staging path;

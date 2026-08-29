@@ -1,7 +1,7 @@
 # PortusOS First-ISO Validation Authority
 
-**Last reviewed:** 2026-08-29T06:31:18Z
-**Last updated:** 2026-08-29T06:31:18Z
+**Last reviewed:** 2026-08-29T07:00:35Z
+**Last updated:** 2026-08-29T07:00:35Z
 
 **Status:** Authoritative executable validation contract for the first ISO
 **Acceptance scope:** ISO-01 through ISO-38 from `docs/ACCEPTANCE.md`
@@ -722,9 +722,10 @@ A useful partially passing candidate remains a development artifact but is not t
 
 Before the first candidate can run this matrix end-to-end, the supported Artix/native build and installed-system verification path must freeze the exact identities that remain intentionally unresolved, including as applicable:
 
-The current public native build has already proved real rootfs/livefs construction, both installed kernel lines, and `linux-lts` live-initramfs generation. It has **not** yet produced a candidate ISO: run `20260829T060019Z-3afadb080c36-dev-first-live` stopped during bootfs assembly at the missing `/run/artools/livefs/boot/memtest86+/memtest.bin` path. That input decision is now resolved: direct inspection of official Artix `world` package `memtest86+ 7.20-2` verified the exact `/boot/memtest86+/memtest.bin` payload, no package dependencies, and package licence metadata `GPL2`. The package is tracked in the first-ISO package/boot profile with a fail-closed regression check. Before candidate validation begins, the canonical build must prove that correction through final bootfs, squashfs/ISO creation and checksum evidence.
+The public native path has already proved real rootfs/livefs construction, both installed kernel lines, and `linux-lts` live-initramfs generation, but it has **not** yet produced a candidate ISO. Run `20260829T060019Z-3afadb080c36-dev-first-live` stopped at the missing memtest boot asset; official Artix `memtest86+ 7.20-2` was then verified as the exact provider and added to the tracked package/boot profile with a fail-closed regression check. Run `20260829T063320Z-658f8230fa32-dev-first-live` stopped earlier in `make_livefs()` and therefore did not empirically prove that correction. Its failure demonstrated repository drift: the run's cloned prepared database requested `libopenmpt 0.8.8-1`, while the current official Artix `world` mirror provided `0.8.9-1`, producing widespread 404 retrieval failures plus some slow-mirror errors. Before candidate validation begins, the harness must first prove a coherent native-run repository/database/package-file closure, then prove the memtest bootfs correction through squashfs/ISO creation and checksum evidence.
 
 - Artix repository/keyring/build snapshot and `artools` entry point;
+- native-run repository database identities/hashes captured after the final refresh/freeze point, with the exact resolved transitive rootfs/livefs package set and package-file availability/prefetch evidence bound to the same run;
 - exact Calamares modules/package identities;
 - installed dependency/order behavior for the already-locked base OpenRC service names/runlevels, plus `portusd` service/socket ownership;
 - P14 Linux backend binding/VM behavior for the already-selected `maim`/`xdotool`/X11 inspection package set;
