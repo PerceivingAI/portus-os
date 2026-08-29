@@ -40,7 +40,7 @@ packages:
     profile: base
     package:
       resolution: locked
-      names: [base, artix-live-base, artix-live-openrc, artix-grub-live, iso-initcpio, linux-firmware, intel-ucode, amd-ucode]
+      names: [base, artix-live-base, artix-live-openrc, artix-grub-live, iso-initcpio, memtest86+, linux-firmware, intel-ucode, amd-ucode]
       unresolved_reason: null
       required_gate: L2
 

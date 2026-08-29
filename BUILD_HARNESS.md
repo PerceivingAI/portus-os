@@ -538,7 +538,7 @@ exit 78
 status = blocked
 ```
 
-Used for mandatory environment blockers other than dirty source and for unresolved native-build prerequisites. Historical clean checkpoint `7aca133` reached **`32 PASS / 2 WARN / 0 BLOCK`** before the native adapter existed. The first complete cold staging run from clean revision `4e01a55` completed `first-iso-staging` successfully for Portus, Codex, PortusBrowser, Portus MCP and tunnel-client, then returned `78` only because the owner sudo ticket was not current. A direct `portus-build build-iso` without a run-owned staging manifest also intentionally returns `78`. Later native runs proved the private Artix execution path and motivated run-scoped upper/work isolation plus cross-namespace pre/post cleanup verification. Native execution is no longer an unresolved capability; current unresolved native facts are specific build-input/tooling contracts such as the `artools 0.39.1-1` memtest bootfs expectation.
+Used for mandatory environment blockers other than dirty source and for unresolved native-build prerequisites. Historical clean checkpoint `7aca133` reached **`32 PASS / 2 WARN / 0 BLOCK`** before the native adapter existed. The first complete cold staging run from clean revision `4e01a55` completed `first-iso-staging` successfully for Portus, Codex, PortusBrowser, Portus MCP and tunnel-client, then returned `78` only because the owner sudo ticket was not current. A direct `portus-build build-iso` without a run-owned staging manifest also intentionally returns `78`. Later native runs proved the private Artix execution path and motivated run-scoped upper/work isolation plus cross-namespace pre/post cleanup verification. Native execution is no longer an unresolved capability. The `artools 0.39.1-1` memtest bootfs expectation is now resolved in tracked inputs as the official Artix `memtest86+` package; only a new native run can prove that correction through final bootfs/ISO construction.
 
 ### Other build failure
 
@@ -648,12 +648,12 @@ config/source capture
   -> native buildiso inside the verified Artix context
   -> rootfs/livefs + installed dual-kernel initramfs
   -> linux-lts live initramfs
-  -> bootfs assembly [current memtest dependency blocker]
+  -> bootfs assembly [memtest86+ dependency now tracked; native proof pending]
   -> squashfs/final ISO construction
   -> exactly one ISO under PORTUS_BUILD_ARTIFACT_DIR
   -> ISO SHA-256 + final run evidence
 ```
 
-The next correction must determine the exact locked Artix contract for the memtest asset: either add the required official package to the tracked boot input set or, if upstream `buildiso` is proven to assume an optional asset incorrectly, extend the narrow fail-closed compatibility seam. Do not bypass the error with an untracked file or manual build-root mutation.
+The memtest correction is now locked: official Artix `memtest86+ 7.20-2` was inspected directly and supplies `/boot/memtest86+/memtest.bin`, so the package is included in both the package contract and `packages-boot`. `portus-build` rejects an `artools 0.39.1` boot profile that omits it. Do not replace this with an untracked file or manual build-root mutation; the next canonical native run is the proof that the tracked dependency closes this seam.
 
 Blocked and failed runs remain valid build-history records and should remain inspectable. The config-driven entry point remains the normal interface; callers must not learn or maintain a separate manual `buildiso` sequence. The privileged cleanup contract removes the run-scoped Artix context and proves no leaked mounts/process references/seed loops, but failed `artools` construction may still leave root-owned run workspace/chroot data for diagnosis. Reclaim such failed-run disk usage only after proving no live references and preserving the run ledger/evidence required for regression analysis.

@@ -1199,6 +1199,16 @@ fn validate_artools_adapter(repo_root: &Path) -> BuildResult<()> {
     Ok(())
 }
 
+fn validate_artools_boot_packages(packages_boot: &[String]) -> BuildResult<()> {
+    if !packages_boot.iter().any(|package| package == "memtest86+") {
+        return Err(BuildError::Invalid(
+            "artools 0.39.1 boot profile must provide memtest86+ for /boot/memtest86+/memtest.bin"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_artools_profile_sources(repo_root: &Path, adapter: &ArtoolsAdapter) -> BuildResult<()> {
     let profile_path = format!("{}/portus/profile.yaml", adapter.profile_source_root);
     let common_path = format!("{}/common/common.yaml", adapter.profile_source_root);
@@ -1256,6 +1266,8 @@ fn validate_artools_profile_sources(repo_root: &Path, adapter: &ArtoolsAdapter) 
         }
         expected_packages.extend(package.names.iter().cloned());
     }
+
+    validate_artools_boot_packages(&common.packages_boot)?;
 
     let expected_live_only = BTreeSet::from([
         "artix-live-base".to_string(),
@@ -2297,6 +2309,21 @@ mod tests {
         assert_eq!(layout.generated.out, "portusos-build/out");
         assert!(!layout.clean_policy.arbitrary_path_delete);
         assert_eq!(layout.clean_policy.allowed_roots.len(), 3);
+    }
+
+    #[test]
+    fn artools_boot_packages_require_memtest_payload_provider() {
+        let valid = vec!["grub".to_string(), "memtest86+".to_string()];
+        assert!(validate_artools_boot_packages(&valid).is_ok());
+
+        let invalid = vec!["grub".to_string(), "iso-initcpio".to_string()];
+        match validate_artools_boot_packages(&invalid) {
+            Err(BuildError::Invalid(message)) => {
+                assert!(message.contains("memtest86+"));
+                assert!(message.contains("memtest.bin"));
+            }
+            other => panic!("expected missing memtest86+ to fail closed, got {other:?}"),
+        }
     }
 
     #[test]
