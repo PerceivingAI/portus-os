@@ -1,10 +1,10 @@
 # PortusOS ISO Build Harness
 
-**Last reviewed:** 2026-08-29T07:16:41Z
+**Last reviewed:** 2026-08-29T08:02:32Z
 
 **Status:** Authoritative for repeated PortusOS ISO build orchestration, build-configuration semantics, per-attempt logging/metadata, artifact capture, and the handoff from repository source to the native Artix ISO adapter.
 
-**Last reconciled:** 2026-08-29T07:16:41Z
+**Last reconciled:** 2026-08-29T08:02:32Z
 
 **ISO architecture authority:** `docs/ISO_BUILD_INSTALLER.md`
 
@@ -634,7 +634,7 @@ Credentials needed after boot are provisioned through their own runtime/setup bo
 
 The config-driven iteration harness and **native Artix execution path are implemented**. The repository knows the verified isolated context, `artools 0.39.1-1` interface, `portus` profile layout, fixed `buildiso` arguments, selected package set, OpenRC service identities, live-session path, expected ISO output naming, run-scoped privilege boundary, and cleanup proof contract.
 
-The current implementation frontier is **native proof of the newly implemented repository/package closure, then late bootfs/final-ISO construction**, not adapter discovery, payload staging, sudo handoff, or native process invocation. Public run `20260829T060019Z-3afadb080c36-dev-first-live` reached `linux-lts` live-initramfs generation before exposing the missing memtest boot input; that package contract is corrected. Run `20260829T063320Z-658f8230fa32-dev-first-live` then demonstrated the next defect: its cloned prepared pacman database requested `libopenmpt 0.8.8-1` while current `world` mirrors carried `0.8.9-1`, so `make_livefs()` failed on stale package identities. Both failed runs produced passing native cleanup evidence.
+The current implementation frontier is **resilient exact-package acquisition for the repository closure, then late bootfs/final-ISO construction**, not adapter discovery, payload staging, sudo handoff, native process invocation, repository refresh, or dependency resolution. Public run `20260829T060019Z-3afadb080c36-dev-first-live` reached `linux-lts` live-initramfs generation before exposing the missing memtest boot input; that package contract is corrected. Run `20260829T063320Z-658f8230fa32-dev-first-live` demonstrated stale prepared pacman metadata against newer rolling mirrors. The closure implementation then moved repository synchronization and resolution ahead of `buildiso`. Canonical run `20260829T072729Z-4164361b115a-dev-first-live` empirically proved that front half: it freshly synchronized `system`/`world`/`galaxy`, captured their database hashes, and resolved an exact 667-package closure with about 1469.51 MiB to download. It failed during the first bulk `pacman -Sw` prefetch when multiple mirrors timed out or terminated TLS transfers, so `buildiso` never started. `repository-closure.json` correctly recorded failure, the outer harness classified the stage as `repository-closure`, and native cleanup passed.
 
 The supported progression is therefore:
 
@@ -646,7 +646,8 @@ config/source capture
   -> contract report + build plan
   -> run-owned Artix workspace/profile/payload staging
   -> native-boundary Artix repository metadata refresh/freeze
-  -> exact package dependency closure + package-file availability/prefetch proof
+  -> exact package dependency closure
+  -> resilient exact-package acquisition + verified-cache completion proof
   -> native buildiso inside the verified Artix context
   -> rootfs/livefs + installed dual-kernel initramfs
   -> linux-lts live initramfs
@@ -658,6 +659,6 @@ config/source capture
 
 The memtest correction is now locked: official Artix `memtest86+ 7.20-2` was inspected directly and supplies `/boot/memtest86+/memtest.bin`, so the package is included in both the package contract and `packages-boot`. `portus-build` rejects an `artools 0.39.1` boot profile that omits it. Do not replace this with an untracked file or manual build-root mutation; the next canonical native run is the proof that the tracked dependency closes this seam.
 
-The repository-closure correction is now implemented fail-closed in `scripts/artix/context.py`. After cloning and mounting the run-owned Artix context, but before `buildiso`, the helper forces a fresh synchronization of the locked stable `system`/`world`/`galaxy` repositories; copies those databases into a run-owned closure tree; resolves the complete package graph from an empty per-run pacman database; prefetches the exact resolved files into `portusos-build/cache/artix-packages`; verifies every cached file against the repository-provided SHA-256; and builds a local run snapshot containing the exact databases plus package-file links. It then rewrites only the run-owned `iso-x86_64.conf` to use that `file://` snapshot, independently re-resolves the graph through a second empty database, and refuses continuation unless the identities match exactly. Before `buildiso`, the shared package cache is returned to the outer build owner and its native bind mount is remounted read-only. `repository-closure.json` records repository hashes, package identities, cache reuse/recovery, local-only configuration and validation results; the outer harness validates and hashes that evidence and rejects a nominally successful native builder without a passing closure record. Warm builds may reuse only hash-matching package files; stale, missing or corrupt files fail or are recovered before construction. This implementation is host-safe tested but still requires empirical proof in the next canonical native run.
+The repository-closure correction is fail-closed in `scripts/artix/context.py`. After cloning and mounting the run-owned Artix context, but before `buildiso`, the helper forces a fresh synchronization of the locked stable `system`/`world`/`galaxy` repositories; copies and hashes those databases into a run-owned closure tree; resolves the complete package graph from an empty per-run pacman database; acquires the exact package files into `portusos-build/cache/artix-packages`; verifies them against repository-provided SHA-256 values; builds a local run snapshot; independently re-resolves that snapshot; then remounts the verified cache read-only before `buildiso`. Run `20260829T072729Z-4164361b115a-dev-first-live` proved fresh synchronization and exact graph resolution but exposed a weakness in the acquisition step: one monolithic `pacman -Sw` transaction over a roughly 1.47-GiB/667-package cold closure was vulnerable to several slow or prematurely terminating mirrors. The persistent cache retained substantial successfully downloaded payload, but the failure evidence reported `packages: []` and zero cache progress because those fields are currently committed only after the whole prefetch succeeds. The next hardening must preserve the already-correct closure identity while making acquisition resumable and observable per exact package, with bounded retries and a controlled mirror strategy. Only a fully acquired and SHA-verified closure may be exposed to the local-only `buildiso` phase.
 
 Blocked and failed runs remain valid build-history records and should remain inspectable. The config-driven entry point remains the normal interface; callers must not learn or maintain a separate manual `buildiso` sequence. The privileged cleanup contract removes the run-scoped Artix context and proves no leaked mounts/process references/seed loops, but failed `artools` construction may still leave root-owned run workspace/chroot data for diagnosis. Reclaim such failed-run disk usage only after proving no live references and preserving the run ledger/evidence required for regression analysis.

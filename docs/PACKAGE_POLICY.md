@@ -1,7 +1,7 @@
 # PortusOS Package and Supply-Chain Policy
 
-**Last reviewed:** 2026-08-29T07:16:41Z
-**Last updated:** 2026-08-29T07:16:41Z
+**Last reviewed:** 2026-08-29T08:02:32Z
+**Last updated:** 2026-08-29T08:02:32Z
 
 **Status:** Authoritative for the locked first-ISO package-source boundary and top-level package inventory; candidate versions/repository lock, remaining profile decisions and candidate redistribution/installed evidence still require verification
 **Target:** First accepted x86_64 VMware development ISO
@@ -55,7 +55,9 @@ This is the preferred package-policy outcome: use the verified official Artix pa
 
 Canonical run `20260829T063320Z-658f8230fa32-dev-first-live` demonstrated that successful synchronization during preparation is not sufficient for a later native build against rolling Artix mirrors. The run cloned a prepared pacman database that resolved `libopenmpt 0.8.8-1`; when `make_livefs()` later fetched its Calamares/KDE dependency set, the current official `world` mirror carried `libopenmpt 0.8.9-1` instead. The stale identity therefore produced widespread 404 responses, mixed with unrelated slow-mirror errors, and the livefs transaction failed before bootfs construction.
 
-That requirement is now implemented. The native helper freshly synchronizes the locked stable `system`, `world` and `galaxy` repositories after creating the run-owned Artix context; copies and hashes those databases into a per-run closure tree; resolves the full rootfs/livefs/boot dependency graph from an empty per-run pacman database; and prefetches every resolved archive into `portusos-build/cache/artix-packages`. Existing cache entries are reused only when their SHA-256 exactly matches the synchronized repository metadata; corrupt same-name entries are removed before recovery. The helper then exposes the exact database files and package archives through a run-local `file://` repository, rewrites only the run-owned artools stable pacman configuration to disable network repositories, and independently re-resolves the graph through a second empty database. Any identity mismatch blocks the build. Before `buildiso` starts, the persistent package cache is returned to the unprivileged build owner and its bind mount inside the private native namespace is remounted read-only. `repository-closure.json` records the database hashes, resolved package identities and hashes, cache reuse/recovery, frozen configuration and local validation result. A successful outer harness run is invalid without a passing checksum-bound closure record. The next canonical build must empirically prove this implemented path; retrying arbitrary mirrors remains explicitly unsupported as a reproducibility mechanism.
+The closure architecture is implemented, and canonical run `20260829T072729Z-4164361b115a-dev-first-live` proved its repository-synchronization and resolution boundary. The run freshly synchronized the locked stable `system`, `world` and `galaxy` repositories, captured their database SHA-256 values, and resolved an exact 667-package dependency graph requiring about 1469.51 MiB of downloads. It then failed during the initial bulk `pacman -Sw` acquisition because multiple mirrors hit low-speed timeouts or TLS EOFs. `buildiso` was never started, which is the intended fail-closed behavior.
+
+This run narrows the remaining defect to acquisition resilience rather than closure identity. PortusOS must retain the freshly resolved exact package identities while acquiring them in bounded resumable units, verify each completed archive by the repository SHA-256 before reuse, and use a controlled mirror selection/failover policy rather than depending on one monolithic transaction across a heterogeneous mirrorlist. Failed-run evidence must also preserve the resolved package graph and accurately report verified/reused/downloaded/corrupt/missing cache state even when acquisition stops early. The persistent cache from the failed run retained substantial valid payload; that work should be reusable after exact-hash verification rather than discarded. Retrying arbitrary mirrors while changing repository state remains unsupported.
 
 ## 3. AUR boundary
 

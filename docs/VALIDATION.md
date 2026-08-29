@@ -1,7 +1,7 @@
 # PortusOS First-ISO Validation Authority
 
-**Last reviewed:** 2026-08-29T07:16:41Z
-**Last updated:** 2026-08-29T07:16:41Z
+**Last reviewed:** 2026-08-29T08:02:32Z
+**Last updated:** 2026-08-29T08:02:32Z
 
 **Status:** Authoritative executable validation contract for the first ISO
 **Acceptance scope:** ISO-01 through ISO-38 from `docs/ACCEPTANCE.md`
@@ -722,10 +722,10 @@ A useful partially passing candidate remains a development artifact but is not t
 
 Before the first candidate can run this matrix end-to-end, the supported Artix/native build and installed-system verification path must freeze the exact identities that remain intentionally unresolved, including as applicable:
 
-The public native path has already proved real rootfs/livefs construction, both installed kernel lines, and `linux-lts` live-initramfs generation, but it has **not** yet produced a candidate ISO. Run `20260829T060019Z-3afadb080c36-dev-first-live` exposed the missing memtest boot asset; `memtest86+` is now tracked with a fail-closed source validator. Run `20260829T063320Z-658f8230fa32-dev-first-live` then demonstrated rolling-repository drift (`libopenmpt 0.8.8-1` in the run database versus `0.8.9-1` on current `world` mirrors). That second defect is now addressed by a native-run closure gate that freshly captures repository DB hashes, resolves the complete graph from an empty database, prefetches and SHA-256 verifies every archive, validates an identical local-only repository resolution, remounts the verified cache read-only for `buildiso`, and emits `repository-closure.json`. Host-safe tests cover identity drift and missing/corrupt cache files. Before candidate validation begins, a canonical native run must empirically produce a passing closure record and then prove the memtest bootfs correction through squashfs/ISO creation and checksum evidence.
+The public native path has already proved real rootfs/livefs construction, both installed kernel lines, and `linux-lts` live-initramfs generation, but it has **not** yet produced a candidate ISO. Run `20260829T060019Z-3afadb080c36-dev-first-live` exposed the missing memtest boot asset; `memtest86+` is now tracked with a fail-closed source validator. Run `20260829T063320Z-658f8230fa32-dev-first-live` demonstrated rolling-repository drift. Run `20260829T072729Z-4164361b115a-dev-first-live` then proved that the new closure gate freshly synchronizes and hashes the three stable repository databases and resolves the exact graph before construction: 667 packages and about 1469.51 MiB of download were identified. It failed during the initial bulk prefetch on repeated mirror low-speed timeouts/TLS EOFs, so local-only validation and `buildiso` were never reached. The failure was correctly classified as `repository-closure` and cleanup passed. Before candidate validation begins, the acquisition phase must become bounded/resumable and preserve complete partial-progress evidence; then a canonical native run must produce a passing closure record and prove the memtest bootfs correction through squashfs/ISO creation and checksum evidence.
 
 - Artix repository/keyring/build snapshot and `artools` entry point;
-- a passing checksum-bound `repository-closure.json` proving fresh stable repository database identities/hashes, exact resolved transitive package identities/SHA-256s, verified persistent-cache reuse or recovery, identical local-only re-resolution, and read-only cache handoff to `buildiso`;
+- a passing checksum-bound `repository-closure.json` proving fresh stable repository database identities/hashes, exact resolved transitive package identities/SHA-256s, bounded/resumable acquisition with accurate per-package cache status, verified persistent-cache reuse or recovery, identical local-only re-resolution, and read-only cache handoff to `buildiso`;
 - exact Calamares modules/package identities;
 - installed dependency/order behavior for the already-locked base OpenRC service names/runlevels, plus `portusd` service/socket ownership;
 - P14 Linux backend binding/VM behavior for the already-selected `maim`/`xdotool`/X11 inspection package set;
