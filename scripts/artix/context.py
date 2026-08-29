@@ -670,6 +670,16 @@ def write_repository_closure_evidence(manifest_file: Path, value: dict[str, Any]
         os.chown(path, int(uid), int(gid))
 
 
+def freeze_resolved_package_evidence(
+    manifest_file: Path,
+    evidence: dict[str, Any],
+    packages: list[dict[str, Any]],
+) -> None:
+    """Persist the exact resolved graph before any network acquisition can fail."""
+    evidence["packages"] = copy.deepcopy(packages)
+    write_repository_closure_evidence(manifest_file, evidence)
+
+
 def prepare_repository_closure(
     repo: Path,
     native_config: dict[str, Any],
@@ -793,6 +803,8 @@ def prepare_repository_closure(
         missing_targets = sorted(set(targets) - resolved_names)
         if missing_targets:
             raise RuntimeError("package closure omitted explicit targets: " + ", ".join(missing_targets))
+
+        freeze_resolved_package_evidence(manifest_file, evidence, packages)
 
         reused_count = 0
         corrupt_removed: list[str] = []
@@ -1589,6 +1601,28 @@ def self_test() -> int:
     )
     assert [row["name"] for row in closure_rows] == ["base", "calamares"]
     require_same_package_closure(closure_rows, copy.deepcopy(closure_rows))
+    with tempfile.TemporaryDirectory(prefix="portus-artix-evidence-self-test-") as raw_evidence:
+        evidence_root = Path(raw_evidence)
+        manifest_file = evidence_root / "staging-evidence.json"
+        manifest_file.write_text("{}\n", encoding="utf-8")
+        frozen_evidence = {
+            "schema_version": 1,
+            "run_id": "self-test",
+            "status": "fail",
+            "packages": [],
+            "failure": None,
+        }
+        freeze_resolved_package_evidence(manifest_file, frozen_evidence, closure_rows)
+        closure_rows[0]["name"] = "mutated-after-freeze"
+        frozen_evidence["failure"] = "simulated post-resolution acquisition failure"
+        write_repository_closure_evidence(manifest_file, frozen_evidence)
+        persisted = json.loads(repository_closure_evidence_path(manifest_file).read_text(encoding="utf-8"))
+        assert [row["name"] for row in persisted["packages"]] == ["base", "calamares"]
+        required_identity_fields = {"repository", "name", "version", "filename", "sha256", "size_bytes"}
+        assert all(required_identity_fields.issubset(row) for row in persisted["packages"])
+        assert persisted["packages"][0]["size_bytes"] == 1024
+        assert persisted["failure"] == "simulated post-resolution acquisition failure"
+    closure_rows[0]["name"] = "base"
     drifted_rows = copy.deepcopy(closure_rows)
     drifted_rows[1]["version"] = "3.4.3-1"
     try:
