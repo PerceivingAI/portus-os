@@ -736,6 +736,10 @@ def build_checks(repo: Path, config: dict[str, Any], config_path: Path, config_s
         "audit_persistent_package_cache(",
         "summarize_package_progress(",
         "classify_repository_closure_failure(",
+        "freeze_repository_sync_directory(",
+        "require_complete_verified_package_set(",
+        "construct_frozen_local_repository(",
+        "run_buildiso_after_security_boundary(",
         "chroot_capture_stderr(",
         '"failure_class": failure_class',
         'local_server = f"file://{closure_inside}/repo"',
@@ -745,6 +749,7 @@ def build_checks(repo: Path, config: dict[str, Any], config_path: Path, config_s
         "format_repository_closure_failure_reason(",
         "REPOSITORY_CLOSURE_SUBSTAGES",
         "REPOSITORY_CLOSURE_FAILURE_CAUSES",
+        '"buildiso_gate"',
     )
     closure_gate = all(marker in context_text for marker in closure_markers) and all(
         marker in iteration_text for marker in closure_consumer_markers
@@ -755,7 +760,7 @@ def build_checks(repo: Path, config: dict[str, Any], config_path: Path, config_s
         "input-availability",
         "pass" if closure_gate else "block",
         "native-run repository/package closure gate implemented" if closure_gate else "native-run repository/package closure gate missing",
-        "the native handoff anchors repository metadata, resolves the exact package closure, audits resumable cache state, acquires pending identities in bounded byte batches with bounded mirror failover, records per-package/byte progress and structured A6 substage/cause diagnosis, freezes buildiso onto a local-only run snapshot, emits repository-closure.json, and the outer harness validates/surfaces that diagnosis"
+        "the native handoff anchors and mechanically freezes repository metadata, resolves the exact package closure, audits resumable cache state, acquires pending identities in bounded byte batches with bounded mirror failover, records per-package/byte progress and structured A6 diagnosis, constructs the file:// repository only after complete package verification, independently validates it, restores/remounts the cache read-only, gates buildiso on explicit A7 evidence, emits repository-closure.json, and the outer harness validates the security boundary"
         if closure_gate
         else "native construction could pair stale pacman metadata with newer rolling Artix mirrors",
         None

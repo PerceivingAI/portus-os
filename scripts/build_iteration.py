@@ -513,7 +513,7 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
         "local_validation",
         "failure",
     }
-    allowed = required | {"repository_anchor", "package_progress", "progress_summary"}
+    allowed = required | {"repository_anchor", "package_progress", "progress_summary", "buildiso_gate"}
     if not required.issubset(report) or not set(report).issubset(allowed):
         raise ValueError("repository closure report keys differ from the locked evidence shape")
     if report.get("schema_version") != SCHEMA_VERSION or report.get("run_id") != run_id:
@@ -537,6 +537,30 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
             or progress_summary["pending"]["packages"] != 0
         ):
             raise ValueError("passing repository closure report lacks complete per-package progress evidence")
+        buildiso_gate = report.get("buildiso_gate")
+        expected_buildiso_gate_keys = {
+            "status",
+            "all_packages_verified",
+            "verified_package_count",
+            "repository_databases_immutable",
+            "local_repository_constructed",
+            "local_resolution_matches",
+            "cache_outer_owner_restored",
+            "cache_read_only",
+        }
+        if (
+            not isinstance(buildiso_gate, dict)
+            or set(buildiso_gate) != expected_buildiso_gate_keys
+            or buildiso_gate.get("status") != "pass"
+            or buildiso_gate.get("all_packages_verified") is not True
+            or buildiso_gate.get("verified_package_count") != len(report["packages"])
+            or buildiso_gate.get("repository_databases_immutable") is not True
+            or buildiso_gate.get("local_repository_constructed") is not True
+            or buildiso_gate.get("local_resolution_matches") is not True
+            or buildiso_gate.get("cache_outer_owner_restored") is not True
+            or buildiso_gate.get("cache_read_only") is not True
+        ):
+            raise ValueError("passing repository closure report lacks the complete A7 buildiso security gate")
         anchor = report.get("repository_anchor")
         selected_anchor = anchor.get("selected") if isinstance(anchor, dict) else None
         if (
@@ -552,10 +576,20 @@ def validate_repository_closure_report(report: Any, run_id: str) -> str:
         frozen = report.get("frozen_pacman_config")
         local = report.get("local_validation")
         cache = report.get("cache")
-        if not isinstance(frozen, dict) or frozen.get("network_repositories_enabled") is not False:
-            raise ValueError("passing repository closure report did not prove a local-only pacman configuration")
-        if not isinstance(local, dict) or local.get("resolution_matches") is not True or local.get("package_files_verified") is not True:
-            raise ValueError("passing repository closure report did not prove local package resolution and files")
+        if (
+            not isinstance(frozen, dict)
+            or frozen.get("network_repositories_enabled") is not False
+            or not isinstance(frozen.get("server"), str)
+            or not frozen["server"].startswith("file://")
+        ):
+            raise ValueError("passing repository closure report did not prove a local-only file:// pacman configuration")
+        if (
+            not isinstance(local, dict)
+            or local.get("resolution_matches") is not True
+            or local.get("package_files_verified") is not True
+            or local.get("network_repositories_enabled") is not False
+        ):
+            raise ValueError("passing repository closure report did not prove local-only package resolution and files")
         if (
             not isinstance(cache, dict)
             or cache.get("read_only_for_buildiso") is not True
@@ -1162,11 +1196,36 @@ def self_test() -> int:
                 "read_only_for_buildiso": True,
                 "outer_owner_restored": True,
             },
-            "frozen_pacman_config": {"network_repositories_enabled": False},
-            "local_validation": {"resolution_matches": True, "package_files_verified": True},
+            "buildiso_gate": {
+                "status": "pass",
+                "all_packages_verified": True,
+                "verified_package_count": 1,
+                "repository_databases_immutable": True,
+                "local_repository_constructed": True,
+                "local_resolution_matches": True,
+                "cache_outer_owner_restored": True,
+                "cache_read_only": True,
+            },
+            "frozen_pacman_config": {
+                "server": "file:///run/portus-build/repository-closure/repo",
+                "network_repositories_enabled": False,
+            },
+            "local_validation": {
+                "resolution_matches": True,
+                "package_files_verified": True,
+                "network_repositories_enabled": False,
+            },
             "failure": None,
         }
         assert validate_repository_closure_report(closure_fixture, "run-1") == "pass"
+        invalid_buildiso_gate_fixture = copy.deepcopy(closure_fixture)
+        invalid_buildiso_gate_fixture["buildiso_gate"]["cache_read_only"] = False
+        try:
+            validate_repository_closure_report(invalid_buildiso_gate_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("passing closure evidence must reject an incomplete A7 buildiso gate")
         current_failed_fixture = copy.deepcopy(closure_fixture)
         current_failed_fixture["status"] = "fail"
         current_failed_fixture["failure"] = {
