@@ -720,14 +720,28 @@ def build_checks(repo: Path, config: dict[str, Any], config_path: Path, config_s
         "Portus MCP and tunnel-client source/release identities are locked" if locked_external else "Portus MCP and/or tunnel-client identity is not locked",
         None if locked_external else "lock both canonical first-ISO connection-stack identities before native construction",
     )
+    context_manager = repo / "scripts/artix/context.py"
+    context_text = read_text(context_manager) if context_manager.is_file() else ""
+    closure_markers = (
+        "prepare_repository_closure(",
+        "repository-closure.json",
+        '"-Syy"',
+        '"-Sw"',
+        'local_server = f"file://{closure_inside}/repo"',
+    )
+    closure_gate = all(marker in context_text for marker in closure_markers)
     add_check(
         checks,
         "input.network-cache-closure",
         "input-availability",
-        "warn",
-        "exact cold/warm cache closure not yet locked at L2",
-        "a verified fetch command exists when curl passed, but the exact required source cache/network set is still unresolved",
-        "resolve exact native-adapter downloads/cache paths and upgrade this check to direct PASS/BLOCK evidence in the L2 adapter change",
+        "pass" if closure_gate else "block",
+        "native-run repository/package closure gate implemented" if closure_gate else "native-run repository/package closure gate missing",
+        "the native handoff refreshes repository metadata, resolves/prefetches the exact package closure, freezes buildiso onto a local-only run snapshot, and emits repository-closure.json"
+        if closure_gate
+        else "native construction could pair stale pacman metadata with newer rolling Artix mirrors",
+        None
+        if closure_gate
+        else "restore the native-run repository/package closure gate before starting buildiso",
     )
 
     return checks

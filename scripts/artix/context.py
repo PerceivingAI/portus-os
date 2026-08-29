@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,11 @@ from typing import Any
 EX_USAGE = 64
 EX_UNAVAILABLE = 78
 CONFIG_PATH = Path("portusos-build/artix/bootstrap.json")
+PACKAGE_CACHE_PATH = Path("portusos-build/cache/artix-packages")
+REPOSITORY_CLOSURE_FILE = "repository-closure.json"
+PACMAN_PRINT_FORMAT = "%r|%n|%v|%f|%h|%s|%a"
+PACKAGE_TARGET_RE = re.compile(r"^[A-Za-z0-9@._+:-]+$")
+FROZEN_REPOSITORIES = ("system", "world", "galaxy")
 
 
 def utc_now() -> str:
@@ -128,9 +134,13 @@ def validate_artools_unattended_contract(buildiso_text: str, basestrap_text: str
     match = re.search(r"(?m)^basestrap_args=\(([^)]*)\)\s*$", buildiso_text)
     if match is None:
         raise RuntimeError("buildiso does not expose the expected basestrap_args contract")
-    for token in match.group(1).split():
-        if token.startswith("-") and "i" in token[1:]:
-            raise RuntimeError("buildiso enables basestrap interactive mode")
+    option_chars = "".join(token[1:] for token in match.group(1).split() if token.startswith("-"))
+    if "i" in option_chars:
+        raise RuntimeError("buildiso enables basestrap interactive mode")
+    if "c" not in option_chars:
+        raise RuntimeError("buildiso no longer shares the host package cache with basestrap")
+    if 'basestrap_args+=(-C "${pacman_conf}")' not in buildiso_text:
+        raise RuntimeError("buildiso no longer routes basestrap through the selected pacman configuration")
     if 'basestrap "${basestrap_args[@]}"' not in buildiso_text:
         raise RuntimeError("buildiso no longer invokes basestrap through the locked argument array")
     for marker in (
@@ -523,6 +533,407 @@ def prepare_mounted(repo: Path, config: dict[str, Any]) -> None:
                 print(f"warning: failed to clean up Artix mounts after prepare failure: {cleanup_error}", file=sys.stderr)
         raise
 
+def parse_artools_package_targets(common_text: str, profile_text: str) -> list[str]:
+    """Extract package targets only from the locked artools package sections."""
+    targets: set[str] = set()
+
+    active_common = False
+    for raw in common_text.splitlines():
+        if raw and not raw[0].isspace() and raw.rstrip().endswith(":"):
+            active_common = raw.split(":", 1)[0].startswith("packages-")
+            continue
+        if active_common:
+            match = re.match(r"^\s*-\s+([^\s#]+)\s*(?:#.*)?$", raw)
+            if match:
+                targets.add(match.group(1))
+
+    active_profile = False
+    for raw in profile_text.splitlines():
+        if raw and not raw[0].isspace() and raw.rstrip().endswith(":"):
+            active_profile = raw.split(":", 1)[0] in {"rootfs", "livefs"}
+            continue
+        if active_profile:
+            match = re.match(r"^\s*-\s+([^\s#]+)\s*(?:#.*)?$", raw)
+            if match:
+                targets.add(match.group(1))
+
+    if not targets:
+        raise RuntimeError("artools package profile produced an empty package target set")
+    invalid = sorted(target for target in targets if not PACKAGE_TARGET_RE.fullmatch(target))
+    if invalid:
+        raise RuntimeError(f"artools package profile contains invalid package targets: {', '.join(invalid)}")
+    return sorted(targets, key=lambda value: value.encode("utf-8"))
+
+
+def parse_pacman_print_rows(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw in text.splitlines():
+        if not raw.strip():
+            continue
+        fields = raw.split("|")
+        if len(fields) != 7:
+            raise RuntimeError(f"unexpected pacman closure row: {raw!r}")
+        repository, name, version, filename, sha256, size_text, architecture = fields
+        if repository not in FROZEN_REPOSITORIES:
+            raise RuntimeError(f"package closure escaped locked repositories: {repository}/{name}")
+        if not PACKAGE_TARGET_RE.fullmatch(name) or not version or not filename:
+            raise RuntimeError(f"invalid package closure identity: {raw!r}")
+        if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+            raise RuntimeError(f"package closure lacks a valid SHA-256: {repository}/{name}")
+        try:
+            size_bytes = int(size_text)
+        except ValueError as error:
+            raise RuntimeError(f"package closure size is invalid: {repository}/{name}") from error
+        if size_bytes < 0:
+            raise RuntimeError(f"package closure size is negative: {repository}/{name}")
+        identity = (repository, name, version)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        rows.append(
+            {
+                "repository": repository,
+                "name": name,
+                "version": version,
+                "filename": filename,
+                "sha256": sha256,
+                "size_bytes": size_bytes,
+                "architecture": architecture,
+            }
+        )
+    if not rows:
+        raise RuntimeError("pacman resolved an empty repository/package closure")
+    rows.sort(key=lambda row: (row["repository"], row["name"], row["version"]))
+    return rows
+
+
+def closure_identity(packages: list[dict[str, Any]]) -> list[tuple[str, str, str, str, str]]:
+    return [
+        (entry["repository"], entry["name"], entry["version"], entry["filename"], entry["sha256"])
+        for entry in packages
+    ]
+
+
+def require_same_package_closure(expected: list[dict[str, Any]], actual: list[dict[str, Any]]) -> None:
+    if closure_identity(expected) != closure_identity(actual):
+        raise RuntimeError("frozen local repository resolves a different package closure than the fresh network database")
+
+
+def verify_cached_package_files(cache: Path, packages: list[dict[str, Any]]) -> None:
+    for package in packages:
+        cached = cache / package["filename"]
+        if not cached.is_file():
+            raise RuntimeError(f"prefetched package file is missing: {package['filename']}")
+        actual_sha256 = sha256_file(cached)
+        if actual_sha256 != package["sha256"]:
+            raise RuntimeError(
+                f"prefetched package SHA-256 mismatch for {package['filename']}: {actual_sha256}"
+            )
+
+
+def render_frozen_pacman_config(original: str, local_server: str) -> str:
+    """Retain locked pacman options but replace rolling mirrors with one local run snapshot."""
+    lines = original.splitlines()
+    first_repo = None
+    enabled_repositories: list[str] = []
+    for index, raw in enumerate(lines):
+        stripped = raw.strip()
+        if stripped.startswith("[") and stripped.endswith("]") and not stripped.startswith("[#"):
+            name = stripped[1:-1]
+            if name != "options":
+                if first_repo is None:
+                    first_repo = index
+                enabled_repositories.append(name)
+    if tuple(enabled_repositories) != FROZEN_REPOSITORIES:
+        raise RuntimeError(
+            "stable artools pacman repositories drifted from system/world/galaxy: "
+            + ",".join(enabled_repositories)
+        )
+    if first_repo is None:
+        raise RuntimeError("stable artools pacman configuration has no enabled repositories")
+    prefix = "\n".join(lines[:first_repo]).rstrip() + "\n\n"
+    repositories = "\n\n".join(f"[{name}]\nServer = {local_server}" for name in FROZEN_REPOSITORIES)
+    return prefix + repositories + "\n"
+
+
+def repository_closure_evidence_path(manifest_file: Path) -> Path:
+    return manifest_file.parent / REPOSITORY_CLOSURE_FILE
+
+
+def write_repository_closure_evidence(manifest_file: Path, value: dict[str, Any]) -> None:
+    path = repository_closure_evidence_path(manifest_file)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    uid = os.environ.get("SUDO_UID")
+    gid = os.environ.get("SUDO_GID")
+    if uid and gid:
+        os.chown(path, int(uid), int(gid))
+
+
+def prepare_repository_closure(
+    repo: Path,
+    native_config: dict[str, Any],
+    manifest: dict[str, Any],
+    manifest_file: Path,
+) -> dict[str, Any]:
+    """Freeze one coherent Artix repository/package universe before buildiso starts."""
+    p = paths(repo, native_config)
+    resolved = manifest["_resolved"]
+    workspace = resolved["workspace"]
+    common = workspace / "iso-profiles/common/common.yaml"
+    profile = workspace / "iso-profiles/portus/profile.yaml"
+    targets = parse_artools_package_targets(
+        common.read_text(encoding="utf-8"),
+        profile.read_text(encoding="utf-8"),
+    )
+    pacman_config = manifest["artools"]["stable_pacman_config"]
+    pacman_config_host = p["root"] / pacman_config.lstrip("/")
+    mirrorlist_host = p["root"] / "etc/pacman.d/mirrorlist"
+    if not pacman_config_host.is_file() or not mirrorlist_host.is_file():
+        raise RuntimeError("native Artix context is missing the locked pacman config or mirrorlist")
+
+    cache_host = repo / PACKAGE_CACHE_PATH
+    cache_host.mkdir(parents=True, exist_ok=True)
+    cache_target = p["root"] / "var/cache/pacman/pkg"
+    cache_target.mkdir(parents=True, exist_ok=True)
+    if is_mountpoint(cache_target):
+        raise RuntimeError("native Artix package cache target is already mounted before closure setup")
+    run(["mount", "--bind", str(cache_host), str(cache_target)])
+    run(["mount", "--make-private", str(cache_target)])
+    outer_cache_uid = repo.stat().st_uid
+    outer_cache_gid = repo.stat().st_gid
+    chroot(repo, native_config, ["/usr/bin/chown", "-R", "alpm:alpm", "/var/cache/pacman/pkg"])
+    chroot(repo, native_config, ["/usr/bin/chmod", "0755", "/var/cache/pacman/pkg"])
+
+    closure_host = resolved["native_root"] / "repository-closure"
+    if closure_host.exists():
+        raise RuntimeError(f"run-owned repository closure already exists: {closure_host}")
+    closure_host.mkdir(parents=True, exist_ok=False)
+    closure_db = closure_host / "pacman-db"
+    validation_db = closure_host / "validation-db"
+    frozen_repo = closure_host / "repo"
+    for directory in (closure_db / "local", closure_db / "sync", validation_db / "local", validation_db / "sync", frozen_repo):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    closure_inside = "/run/portus-build/repository-closure"
+    closure_db_inside = f"{closure_inside}/pacman-db"
+    validation_db_inside = f"{closure_inside}/validation-db"
+    local_server = f"file://{closure_inside}/repo"
+    original_config = pacman_config_host.read_text(encoding="utf-8", errors="strict")
+    evidence: dict[str, Any] = {
+        "schema_version": 1,
+        "run_id": manifest["run_id"],
+        "captured_at": utc_now(),
+        "status": "fail",
+        "package_targets": targets,
+        "profile_sha256": {
+            "common": sha256_file(common),
+            "portus": sha256_file(profile),
+        },
+        "network_pacman_config": {
+            "path": pacman_config,
+            "sha256": hashlib.sha256(original_config.encode("utf-8")).hexdigest(),
+        },
+        "mirrorlist": {
+            "path": "/etc/pacman.d/mirrorlist",
+            "sha256": sha256_file(mirrorlist_host),
+        },
+        "repositories": [],
+        "packages": [],
+        "cache": {
+            "path": PACKAGE_CACHE_PATH.as_posix(),
+            "reused_count": 0,
+            "downloaded_or_recovered_count": 0,
+            "corrupt_entries_removed": [],
+            "verified_count": 0,
+            "read_only_for_buildiso": False,
+            "outer_owner_restored": False,
+        },
+        "frozen_pacman_config": None,
+        "local_validation": None,
+        "failure": None,
+    }
+    try:
+        chroot(
+            repo,
+            native_config,
+            ["/usr/bin/pacman", "-Syy", "--noconfirm", "--config", pacman_config],
+        )
+        sync_dir = p["root"] / "var/lib/pacman/sync"
+        repository_records: list[dict[str, Any]] = []
+        for repository in FROZEN_REPOSITORIES:
+            source_db = sync_dir / f"{repository}.db"
+            if not source_db.is_file():
+                raise RuntimeError(f"fresh Artix repository database is missing: {repository}.db")
+            for destination in (closure_db / "sync" / f"{repository}.db", frozen_repo / f"{repository}.db"):
+                shutil.copy2(source_db, destination)
+            repository_records.append(
+                {
+                    "name": repository,
+                    "database_sha256": sha256_file(source_db),
+                    "database_size_bytes": source_db.stat().st_size,
+                }
+            )
+        evidence["repositories"] = repository_records
+
+        resolve_command = [
+            "/usr/bin/pacman",
+            "-Sp",
+            "--config",
+            pacman_config,
+            "--dbpath",
+            closure_db_inside,
+            "--print-format",
+            PACMAN_PRINT_FORMAT,
+            *targets,
+        ]
+        resolved_result = chroot(repo, native_config, resolve_command, capture=True)
+        packages = parse_pacman_print_rows(resolved_result.stdout)
+        resolved_names = {entry["name"] for entry in packages}
+        missing_targets = sorted(set(targets) - resolved_names)
+        if missing_targets:
+            raise RuntimeError("package closure omitted explicit targets: " + ", ".join(missing_targets))
+
+        reused_count = 0
+        corrupt_removed: list[str] = []
+        cache_valid_before: set[str] = set()
+        for package in packages:
+            cached = cache_host / package["filename"]
+            if not cached.exists():
+                continue
+            if not cached.is_file() or sha256_file(cached) != package["sha256"]:
+                cached.unlink()
+                corrupt_removed.append(package["filename"])
+                continue
+            cache_valid_before.add(package["filename"])
+            reused_count += 1
+
+        chroot(
+            repo,
+            native_config,
+            [
+                "/usr/bin/pacman",
+                "-Sw",
+                "--noconfirm",
+                "--config",
+                pacman_config,
+                "--dbpath",
+                closure_db_inside,
+                "--cachedir",
+                "/var/cache/pacman/pkg",
+                *targets,
+            ],
+        )
+
+        verify_cached_package_files(cache_host, packages)
+        for package in packages:
+            link = frozen_repo / package["filename"]
+            link.symlink_to(Path("/var/cache/pacman/pkg") / package["filename"])
+            signature = cache_host / f"{package['filename']}.sig"
+            if signature.is_file():
+                (frozen_repo / signature.name).symlink_to(Path("/var/cache/pacman/pkg") / signature.name)
+            package["cached_before"] = package["filename"] in cache_valid_before
+        evidence["packages"] = packages
+        evidence["cache"] = {
+            "path": PACKAGE_CACHE_PATH.as_posix(),
+            "reused_count": reused_count,
+            "downloaded_or_recovered_count": len(packages) - reused_count,
+            "corrupt_entries_removed": sorted(corrupt_removed),
+            "verified_count": len(packages),
+            "read_only_for_buildiso": False,
+            "outer_owner_restored": False,
+        }
+
+        frozen_config = render_frozen_pacman_config(original_config, local_server)
+        pacman_config_host.write_text(frozen_config, encoding="utf-8")
+        evidence["frozen_pacman_config"] = {
+            "path": pacman_config,
+            "sha256": hashlib.sha256(frozen_config.encode("utf-8")).hexdigest(),
+            "server": local_server,
+            "network_repositories_enabled": False,
+        }
+
+        chroot(
+            repo,
+            native_config,
+            ["/usr/bin/chown", "-R", "alpm:alpm", validation_db_inside],
+        )
+        chroot(
+            repo,
+            native_config,
+            [
+                "/usr/bin/pacman",
+                "-Syy",
+                "--noconfirm",
+                "--config",
+                pacman_config,
+                "--dbpath",
+                validation_db_inside,
+            ],
+        )
+        validation_result = chroot(
+            repo,
+            native_config,
+            [
+                "/usr/bin/pacman",
+                "-Sp",
+                "--config",
+                pacman_config,
+                "--dbpath",
+                validation_db_inside,
+                "--print-format",
+                PACMAN_PRINT_FORMAT,
+                *targets,
+            ],
+            capture=True,
+        )
+        validation_packages = parse_pacman_print_rows(validation_result.stdout)
+        require_same_package_closure(packages, validation_packages)
+        chroot(
+            repo,
+            native_config,
+            [
+                "/usr/bin/pacman",
+                "-Sw",
+                "--noconfirm",
+                "--config",
+                pacman_config,
+                "--dbpath",
+                validation_db_inside,
+                "--cachedir",
+                "/var/cache/pacman/pkg",
+                *targets,
+            ],
+        )
+        evidence["local_validation"] = {
+            "resolved_package_count": len(validation_packages),
+            "resolution_matches": True,
+            "package_files_verified": True,
+            "network_repositories_enabled": False,
+        }
+        run(["chown", "-R", f"{outer_cache_uid}:{outer_cache_gid}", str(cache_host)])
+        evidence["cache"]["outer_owner_restored"] = True
+        run(["mount", "-o", "remount,bind,ro", str(cache_target)])
+        evidence["cache"]["read_only_for_buildiso"] = True
+        evidence["status"] = "pass"
+        evidence["failure"] = None
+        write_repository_closure_evidence(manifest_file, evidence)
+        return evidence
+    except BaseException as error:
+        evidence["failure"] = str(error)
+        write_repository_closure_evidence(manifest_file, evidence)
+        raise
+    finally:
+        # The reusable cache belongs to the unprivileged build owner outside the
+        # private namespace.  Artix's DownloadUser owns it only while prefetching.
+        # Restore ownership even on closure failure so recovery never requires
+        # retaining an alpm-owned generated tree on the outer build host.
+        try:
+            run(["chown", "-R", f"{outer_cache_uid}:{outer_cache_gid}", str(cache_host)])
+        except Exception as ownership_error:
+            print(f"warning: failed to restore Artix package-cache ownership: {ownership_error}", file=sys.stderr)
+
+
 def parse_pacman_desc(text: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     lines = text.splitlines()
@@ -747,6 +1158,7 @@ def load_native_manifest(repo: Path, manifest_file: Path) -> dict[str, Any]:
         "architecture": "x86_64",
         "init": "openrc",
         "workspace_profiles_dir": "iso-profiles",
+        "stable_pacman_config": "/usr/share/artools/pacman.conf.d/iso-x86_64.conf",
         "output_filename_prefix": "artix-portus-openrc-",
         "live_boot_kernel_package": "linux-lts",
         "output_filename_suffix": "-x86_64.iso",
@@ -989,13 +1401,14 @@ def build_iso_inner(repo: Path, config: dict[str, Any], manifest_file: Path) -> 
     if not buildiso.is_file():
         raise RuntimeError("prepared Artix upper state does not provide /usr/bin/buildiso; run private prepare first")
     verify_artools_unattended_contract(p["root"])
-    artools_compatibility = apply_artools_live_kernel_compatibility(
-        p["root"], manifest["artools"]["live_boot_kernel_package"]
-    )
     bind_target = p["root"] / "run/portus-build"
     bind_target.mkdir(parents=True, exist_ok=True)
     run(["mount", "--bind", str(resolved["native_root"]), str(bind_target)])
     run(["mount", "--make-private", str(bind_target)])
+    repository_closure = prepare_repository_closure(repo, native_config, manifest, manifest_file)
+    artools_compatibility = apply_artools_live_kernel_compatibility(
+        p["root"], manifest["artools"]["live_boot_kernel_package"]
+    )
     command = [
         "chroot",
         str(p["root"]),
@@ -1043,6 +1456,8 @@ def build_iso_inner(repo: Path, config: dict[str, Any], manifest_file: Path) -> 
         "unattended": True,
         "stdin": "devnull",
         "artools_compatibility": artools_compatibility,
+        "repository_closure_sha256": sha256_file(repository_closure_evidence_path(manifest_file)),
+        "repository_package_count": len(repository_closure["packages"]),
         "artifact": destination.relative_to(repo).as_posix(),
         "artifact_sha256": sha256_file(destination),
         "artifact_size_bytes": destination.stat().st_size,
@@ -1163,8 +1578,61 @@ def self_test() -> int:
     assert parsed["chromium"]["repository"] == "extra" and parsed["chromium"]["version"] == "1.2-3"
     assert paths(repo, config)["work_root"].is_relative_to(repo / "portusos-build/work")
     assert native_helper_processes("definitely-not-a-real-portus-run") == []
+    package_targets = parse_artools_package_targets(
+        "packages-base:\n  - base\npackages-boot:\n  - grub\n  - memtest86+\n",
+        "live-session:\n  services:\n    - dbus\nrootfs:\n  packages:\n    - linux-lts\nlivefs:\n  packages:\n    - calamares\n",
+    )
+    assert package_targets == ["base", "calamares", "grub", "linux-lts", "memtest86+"]
+    closure_rows = parse_pacman_print_rows(
+        "system|base|3-6.5|base-3-6.5-any.pkg.tar.zst|" + "a" * 64 + "|1024|any\n"
+        "world|calamares|3.4.2-4|calamares-3.4.2-4-x86_64.pkg.tar.zst|" + "b" * 64 + "|2048|x86_64\n"
+    )
+    assert [row["name"] for row in closure_rows] == ["base", "calamares"]
+    require_same_package_closure(closure_rows, copy.deepcopy(closure_rows))
+    drifted_rows = copy.deepcopy(closure_rows)
+    drifted_rows[1]["version"] = "3.4.3-1"
+    try:
+        require_same_package_closure(closure_rows, drifted_rows)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("repository/package identity drift must fail closed")
+    with tempfile.TemporaryDirectory(prefix="portus-artix-cache-self-test-") as raw_cache:
+        cache = Path(raw_cache)
+        fixture_bytes = b"verified package cache fixture"
+        fixture = cache / "fixture-1-any.pkg.tar.zst"
+        fixture_row = {
+            "filename": fixture.name,
+            "sha256": hashlib.sha256(fixture_bytes).hexdigest(),
+        }
+        try:
+            verify_cached_package_files(cache, [fixture_row])
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("missing package cache entry must fail closed")
+        fixture.write_bytes(fixture_bytes)
+        verify_cached_package_files(cache, [fixture_row])
+        fixture.write_bytes(b"corrupt")
+        try:
+            verify_cached_package_files(cache, [fixture_row])
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("corrupt package cache entry must fail closed")
+    frozen_fixture = render_frozen_pacman_config(
+        "[options]\nSigLevel = Required DatabaseOptional\n\n[system]\nInclude = /etc/pacman.d/mirrorlist\n\n[world]\nInclude = /etc/pacman.d/mirrorlist\n\n[galaxy]\nInclude = /etc/pacman.d/mirrorlist\n",
+        "file:///run/portus-build/repository-closure/repo",
+    )
+    assert "Include = /etc/pacman.d/mirrorlist" not in frozen_fixture
+    assert frozen_fixture.count("Server = file:///run/portus-build/repository-closure/repo") == 3
+    buildiso_fixture = (
+        'basestrap_args=(-GMc)\n'
+        'basestrap_args+=(-C "${pacman_conf}")\n'
+        'basestrap "${basestrap_args[@]}" "${rootfs}"\n'
+    )
     validate_artools_unattended_contract(
-        'basestrap_args=(-GMc)\nbasestrap "${basestrap_args[@]}" "${rootfs}"\n',
+        buildiso_fixture,
         'i) interactive=1 ;;\nif (( ! interactive )); then\n  pacman_args+=(--noconfirm)\nfi\n',
     )
     patched_fixture = patch_artools_buildiso_text(
@@ -1189,13 +1657,22 @@ def self_test() -> int:
         raise AssertionError("alternate kernel must not become the live default")
     try:
         validate_artools_unattended_contract(
-            'basestrap_args=(-GMci)\nbasestrap "${basestrap_args[@]}" "${rootfs}"\n',
+            'basestrap_args=(-GMci)\nbasestrap_args+=(-C "${pacman_conf}")\nbasestrap "${basestrap_args[@]}" "${rootfs}"\n',
             'i) interactive=1 ;;\nif (( ! interactive )); then\n  pacman_args+=(--noconfirm)\nfi\n',
         )
     except RuntimeError:
         pass
     else:
         raise AssertionError("interactive basestrap mode must be rejected")
+    try:
+        validate_artools_unattended_contract(
+            'basestrap_args=(-GM)\nbasestrap_args+=(-C "${pacman_conf}")\nbasestrap "${basestrap_args[@]}" "${rootfs}"\n',
+            'i) interactive=1 ;;\nif (( ! interactive )); then\n  pacman_args+=(--noconfirm)\nfi\n',
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("artools must keep basestrap host-cache sharing for repository closure")
     sample_native_root = repo / "portusos-build/work/native-runs/self-test"
     derived = native_context_config(repo, config, sample_native_root)
     derived_paths = paths(repo, derived)

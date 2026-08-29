@@ -1,10 +1,10 @@
 # PortusOS ISO Build Environment Requirements
 
-**Last reviewed:** 2026-08-29T07:00:35Z
+**Last reviewed:** 2026-08-29T07:16:41Z
 
 **Status:** Authoritative for the environment prerequisites that must be satisfied before the PortusOS ISO harness may enter native ISO construction.
 
-**Last reconciled:** 2026-08-29T07:00:35Z
+**Last reconciled:** 2026-08-29T07:16:41Z
 
 **Build-harness authority:** `BUILD_HARNESS.md`
 
@@ -590,9 +590,9 @@ The preflight record should be:
 
 This makes environment regressions comparable across ISO iterations in the same way source/config regressions are already traceable.
 
-The current checker covers the outer Linux/x86_64 boundary, non-root harness execution, Python/Git/shell/Rust/tool availability, Rust minimum, rustfmt/Clippy requirement based on configured test depth, selected source paths, config identity, source cleanliness, bounded-root writability, disk/CPU/memory observation, explicit Artix-repository contamination on a non-Artix host, privilege-command availability, verified Artix seed/context identity, pacman/keyring state, prepared-context repository synchronization evidence, `artools`/`buildiso` evidence, locked adapter mapping, selected official-Artix package identities, Codex/PortusBrowser freeze state, and locked Portus-MCP/tunnel identities. It does **not yet** prove that the prepared repository databases remain coherent with rolling mirrors at the later native handoff; the latest native run demonstrated that this missing check is blocking and must become direct PASS/BLOCK evidence.
+The current checker covers the outer Linux/x86_64 boundary, non-root harness execution, Python/Git/shell/Rust/tool availability, Rust minimum, rustfmt/Clippy requirement based on configured test depth, selected source paths, config identity, source cleanliness, bounded-root writability, disk/CPU/memory observation, explicit Artix-repository contamination on a non-Artix host, privilege-command availability, verified Artix seed/context identity, pacman/keyring state, prepared-context repository synchronization evidence, `artools`/`buildiso` evidence, locked adapter mapping, selected official-Artix package identities, Codex/PortusBrowser freeze state, locked Portus-MCP/tunnel identities, and the presence of the native-run repository/package-closure gate. `input.network-cache-closure` is now PASS when that fail-closed implementation is present and BLOCK if it is removed. The stronger runtime proof is `repository-closure.json`: native construction must freshly synchronize the stable repos, resolve/prefetch/verify the exact graph, freeze a local-only snapshot, and validate that snapshot before `buildiso`.
 
-Historical checkpoint `7aca133` produced **`32 PASS / 2 WARN / 0 BLOCK`** before native execution was implemented. The current public-repository path has moved beyond that boundary. On commit `3afadb0`, canonical run `20260829T060019Z-3afadb080c36-dev-first-live` entered real Artix `buildiso`, completed rootfs/livefs construction through `linux-lts` live-initramfs generation, and then exposed the missing memtest boot input. Direct inspection of official Artix `world` package `memtest86+ 7.20-2` proved the exact provider, and the tracked package/profile contract now includes it with a fail-closed validator. On commit `658f823`, canonical run `20260829T063320Z-658f8230fa32-dev-first-live` completed the main rootfs package transaction but failed earlier in `make_livefs()` because its cloned prepared pacman database requested stale package identities from newer rolling mirrors: the clearest proof was `libopenmpt 0.8.8-1` in the run database while the official `world` mirror carried `0.8.9-1`. This proves repository freshness/cache closure is a blocking build requirement. The next unresolved boundary is therefore to establish and record a coherent native-run repository/package closure, then re-run far enough to prove the tracked memtest correction and final ISO generation. Cleanup evidence from both native failures passed.
+Historical checkpoint `7aca133` produced **`32 PASS / 2 WARN / 0 BLOCK`** before native execution was implemented. Later native runs proved the sudo handoff, rootfs/livefs construction, dual-kernel path, `linux-lts` live initramfs, memtest package omission, and rolling-repository drift described above. The repository-drift failure is now addressed in source: each native attempt establishes a fresh, checksum-recorded `system`/`world`/`galaxy` database set, resolves the full target graph from an empty per-run database, prefetches and SHA-256 verifies that graph into a reusable cache, independently validates a local-only frozen repository view, and makes the native cache read-only before `buildiso`. The outer harness requires and checksum-binds `repository-closure.json`. The next unresolved boundary is empirical: prove that closure in a canonical native run, then reach and verify the tracked memtest correction and final ISO generation. Cleanup evidence from both prior native failures passed.
 
 ---
 
@@ -616,14 +616,14 @@ The broad environment boundary and core Artix L2 build facts are now locked. The
 Codex target-installed-version + full Artix/OpenRC runtime compatibility proof
 PortusBrowser Artix packaging/native-messaging/runtime proof at the frozen revision
 signed-Calamares live loading plus destructive blank-VM/cleanup/logging/installed-boot proof of the implemented `notesqml` -> `portus-storage` preflight/prepare/finalize path
-native-boundary repository database freshness/freeze + exact transitive package closure + package-file availability/prefetch proof
+empirical native proof of the implemented fresh database + exact transitive closure + verified persistent-cache + local-only frozen-repository gate
 native proof that the tracked `memtest86+` boot dependency closes the `artools 0.39.1-1` bootfs path, then final ISO generation, generated package-lock evidence and repeat-build behavior
 Portus MCP Artix packaging/live launch proof
 pinned tunnel-client Artix/live compatibility proof
 remaining P16 installed ownership/service/filesystem evidence
 measured peak disk working set and resulting hard free-space floor
 measured practical CPU/RAM minimum
-measured cold/warm cache behavior after the required native-run repository/package closure is implemented
+measured cold/warm cache behavior of the implemented native-run repository/package closure
 VMware integration sourcing only if first boot proves native drivers insufficient
 ```
 

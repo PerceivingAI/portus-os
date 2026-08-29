@@ -36,6 +36,7 @@ ENVIRONMENT_PREFLIGHT_FILE = "preflight.json"
 STAGING_EVIDENCE_FILE = "staging-evidence.json"
 NATIVE_BUILD_RESULT_FILE = "native-build-result.json"
 NATIVE_CLEANUP_FILE = "native-cleanup.json"
+REPOSITORY_CLOSURE_FILE = "repository-closure.json"
 MIN_INSTALLER_PLAN_DISK_MIB = 40960
 MAX_INSTALLER_PLAN_DISK_MIB = 1048576
 SECRET_MARKERS = (
@@ -268,6 +269,74 @@ def load_build_config(repo: Path, supplied_path: str) -> tuple[dict[str, Any], P
         if not (repo / reference).is_file():
             raise ValueError(f"build config references missing repository file: {reference}")
     return config, resolved, relative, raw, hashlib.sha256(raw).hexdigest()
+
+
+def validate_repository_closure_report(report: Any, run_id: str) -> str:
+    if not isinstance(report, dict):
+        raise ValueError("repository closure report must be a JSON object")
+    required = {
+        "schema_version",
+        "run_id",
+        "captured_at",
+        "status",
+        "package_targets",
+        "profile_sha256",
+        "network_pacman_config",
+        "mirrorlist",
+        "repositories",
+        "packages",
+        "cache",
+        "frozen_pacman_config",
+        "local_validation",
+        "failure",
+    }
+    if set(report) != required:
+        raise ValueError("repository closure report keys differ from the locked evidence shape")
+    if report.get("schema_version") != SCHEMA_VERSION or report.get("run_id") != run_id:
+        raise ValueError("repository closure report identity mismatch")
+    status = report.get("status")
+    if status not in {"pass", "fail"}:
+        raise ValueError("repository closure report status is invalid")
+    if not isinstance(report.get("package_targets"), list) or not report["package_targets"]:
+        raise ValueError("repository closure package_targets must be non-empty")
+    if not isinstance(report.get("repositories"), list) or not isinstance(report.get("packages"), list):
+        raise ValueError("repository closure repositories/packages must be lists")
+    if status == "pass":
+        if report.get("failure") is not None:
+            raise ValueError("passing repository closure report contains a failure")
+        if not report["packages"] or len(report["repositories"]) != 3:
+            raise ValueError("passing repository closure report lacks frozen package/repository evidence")
+        frozen = report.get("frozen_pacman_config")
+        local = report.get("local_validation")
+        cache = report.get("cache")
+        if not isinstance(frozen, dict) or frozen.get("network_repositories_enabled") is not False:
+            raise ValueError("passing repository closure report did not prove a local-only pacman configuration")
+        if not isinstance(local, dict) or local.get("resolution_matches") is not True or local.get("package_files_verified") is not True:
+            raise ValueError("passing repository closure report did not prove local package resolution and files")
+        if (
+            not isinstance(cache, dict)
+            or cache.get("read_only_for_buildiso") is not True
+            or cache.get("outer_owner_restored") is not True
+            or cache.get("verified_count") != len(report["packages"])
+        ):
+            raise ValueError("passing repository closure report did not prove a verified read-only build cache with restored outer ownership")
+    return status
+
+
+def capture_repository_closure_record(
+    run_dir: Path,
+    metadata: dict[str, Any],
+    run_json: Path,
+    run_id: str,
+) -> str | None:
+    path = run_dir / REPOSITORY_CLOSURE_FILE
+    if not path.is_file():
+        return None
+    report = json.loads(path.read_text(encoding="utf-8"))
+    status = validate_repository_closure_report(report, run_id)
+    metadata["records"]["repository_closure_sha256"] = sha256_file(path)
+    write_json(run_json, metadata)
+    return status
 
 
 def validate_native_cleanup_report(report: Any, run_id: str) -> str:
@@ -545,6 +614,7 @@ def finalize_checksums(run_dir: Path, metadata: dict[str, Any], run_json: Path) 
         STAGING_EVIDENCE_FILE,
         NATIVE_BUILD_RESULT_FILE,
         NATIVE_CLEANUP_FILE,
+        REPOSITORY_CLOSURE_FILE,
     ]
     artifact = metadata.get("artifact")
     if artifact:
@@ -590,6 +660,35 @@ def self_test() -> int:
         path = root / "run.json"
         write_json(path, value)
         assert json.loads(path.read_text(encoding="utf-8")) == value
+        closure_fixture = {
+            "schema_version": SCHEMA_VERSION,
+            "run_id": "run-1",
+            "captured_at": "2026-08-29T00:00:00Z",
+            "status": "pass",
+            "package_targets": ["base"],
+            "profile_sha256": {"common": "a" * 64, "portus": "b" * 64},
+            "network_pacman_config": {"path": "/usr/share/artools/pacman.conf.d/iso-x86_64.conf", "sha256": "c" * 64},
+            "mirrorlist": {"path": "/etc/pacman.d/mirrorlist", "sha256": "d" * 64},
+            "repositories": [{"name": name} for name in ("system", "world", "galaxy")],
+            "packages": [{"name": "base"}],
+            "cache": {
+                "path": "portusos-build/cache/artix-packages",
+                "verified_count": 1,
+                "read_only_for_buildiso": True,
+                "outer_owner_restored": True,
+            },
+            "frozen_pacman_config": {"network_repositories_enabled": False},
+            "local_validation": {"resolution_matches": True, "package_files_verified": True},
+            "failure": None,
+        }
+        assert validate_repository_closure_report(closure_fixture, "run-1") == "pass"
+        closure_fixture["local_validation"] = {"resolution_matches": False, "package_files_verified": True}
+        try:
+            validate_repository_closure_report(closure_fixture, "run-1")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("repository closure evidence must fail closed on resolution mismatch")
 
         interrupt_metadata: dict[str, Any] = {"steps": []}
         interrupt_json = root / "interrupt-run.json"
@@ -829,6 +928,7 @@ def main() -> int:
             "staging_evidence": STAGING_EVIDENCE_FILE,
             "native_build_result": NATIVE_BUILD_RESULT_FILE,
             "native_cleanup": NATIVE_CLEANUP_FILE,
+            "repository_closure": REPOSITORY_CLOSURE_FILE,
             "run_sha256sums": None,
         },
     }
@@ -989,6 +1089,10 @@ def main() -> int:
         exit_code = run_streamed_builder(repo, log_path, metadata, run_json, build_command, env)
     except KeyboardInterrupt:
         cleanup_path = run_dir / NATIVE_CLEANUP_FILE
+        try:
+            capture_repository_closure_record(run_dir, metadata, run_json, run_id)
+        except (OSError, json.JSONDecodeError, ValueError) as error:
+            append_log(log_path, f"repository closure evidence invalid after interruption: {error}")
         if cleanup_path.is_file():
             try:
                 cleanup_report = json.loads(cleanup_path.read_text(encoding="utf-8"))
@@ -999,6 +1103,13 @@ def main() -> int:
                 append_log(log_path, f"native cleanup evidence invalid after interruption: {error}")
         append_log(log_path, "build interrupted by user; terminal SIGINT was allowed to reach the native tree and the top-level builder was reaped")
         return fail_run(metadata, run_json, run_dir, "native-iso-build", "interrupted", EXIT_INTERRUPTED)
+
+    repository_closure_status: str | None = None
+    try:
+        repository_closure_status = capture_repository_closure_record(run_dir, metadata, run_json, run_id)
+    except (OSError, json.JSONDecodeError, ValueError) as error:
+        append_log(log_path, f"repository closure evidence invalid: {error}")
+        return fail_run(metadata, run_json, run_dir, "repository-closure", f"invalid repository closure evidence: {error}", 1)
 
     cleanup_path = run_dir / NATIVE_CLEANUP_FILE
     cleanup_status: str | None = None
@@ -1013,12 +1124,26 @@ def main() -> int:
             return fail_run(metadata, run_json, run_dir, "native-cleanup", f"invalid native cleanup evidence: {error}", 1)
 
     if exit_code != 0:
+        if repository_closure_status == "fail":
+            return fail_run(
+                metadata,
+                run_json,
+                run_dir,
+                "repository-closure",
+                "native repository/package closure failed before buildiso could complete",
+                exit_code,
+            )
         reason = (
             "native ISO construction blocked by an unresolved runtime or owner-authorization prerequisite"
             if exit_code == EXIT_UNRESOLVED
             else "native ISO build failed"
         )
         return fail_run(metadata, run_json, run_dir, "native-iso-build", reason, exit_code)
+
+    if repository_closure_status != "pass":
+        reason = "successful native builder did not prove a coherent local-only Artix repository/package closure"
+        append_log(log_path, reason)
+        return fail_run(metadata, run_json, run_dir, "repository-closure", reason, 1)
 
     if cleanup_status != "pass":
         reason = "successful native builder did not prove zero leaked mounts/process references/seed loop devices and removal of run-scoped Artix scratch"

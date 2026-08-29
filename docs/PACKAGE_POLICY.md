@@ -1,7 +1,7 @@
 # PortusOS Package and Supply-Chain Policy
 
-**Last reviewed:** 2026-08-29T07:00:35Z
-**Last updated:** 2026-08-29T07:00:35Z
+**Last reviewed:** 2026-08-29T07:16:41Z
+**Last updated:** 2026-08-29T07:16:41Z
 
 **Status:** Authoritative for the locked first-ISO package-source boundary and top-level package inventory; candidate versions/repository lock, remaining profile decisions and candidate redistribution/installed evidence still require verification
 **Target:** First accepted x86_64 VMware development ISO
@@ -24,7 +24,7 @@ This policy does not prevent PortusOS from shipping Portus-owned software built 
 
 For third-party Linux/system software selected for the supported first ISO, the default source is an official Artix repository appropriate to the selected Artix release/build environment.
 
-The exact enabled official repositories, mirrors, package versions and lock/resolution mechanics remain to be Linux-verified, but the baseline rules are:
+The stable first-ISO artools path now locks the enabled official repositories to `system`, `world` and `galaxy`. Exact rolling package versions are captured per native run by the repository-closure evidence, while final candidate package identities and redistribution treatment remain candidate-specific. The baseline rules are:
 
 - prefer the official Artix package when it provides the selected capability cleanly;
 - use Artix package signatures/keyrings and normal package metadata as part of source verification;
@@ -55,7 +55,7 @@ This is the preferred package-policy outcome: use the verified official Artix pa
 
 Canonical run `20260829T063320Z-658f8230fa32-dev-first-live` demonstrated that successful synchronization during preparation is not sufficient for a later native build against rolling Artix mirrors. The run cloned a prepared pacman database that resolved `libopenmpt 0.8.8-1`; when `make_livefs()` later fetched its Calamares/KDE dependency set, the current official `world` mirror carried `libopenmpt 0.8.9-1` instead. The stale identity therefore produced widespread 404 responses, mixed with unrelated slow-mirror errors, and the livefs transaction failed before bootfs construction.
 
-PortusOS therefore requires repository metadata and package files to form one coherent native-run input set. Before expensive `buildiso` construction begins, the supported path must refresh or freeze the selected official Artix repository databases at the native boundary, record their identity, resolve the exact transitive package closure required by both rootfs and livefs, and verify or prefetch the corresponding package files. A reusable prepared context may retain tooling/keyring/configuration state, but its old pacman sync database must not silently become authoritative after rolling mirrors have advanced. Retrying arbitrary mirrors is not a reproducibility mechanism.
+That requirement is now implemented. The native helper freshly synchronizes the locked stable `system`, `world` and `galaxy` repositories after creating the run-owned Artix context; copies and hashes those databases into a per-run closure tree; resolves the full rootfs/livefs/boot dependency graph from an empty per-run pacman database; and prefetches every resolved archive into `portusos-build/cache/artix-packages`. Existing cache entries are reused only when their SHA-256 exactly matches the synchronized repository metadata; corrupt same-name entries are removed before recovery. The helper then exposes the exact database files and package archives through a run-local `file://` repository, rewrites only the run-owned artools stable pacman configuration to disable network repositories, and independently re-resolves the graph through a second empty database. Any identity mismatch blocks the build. Before `buildiso` starts, the persistent package cache is returned to the unprivileged build owner and its bind mount inside the private native namespace is remounted read-only. `repository-closure.json` records the database hashes, resolved package identities and hashes, cache reuse/recovery, frozen configuration and local validation result. A successful outer harness run is invalid without a passing checksum-bound closure record. The next canonical build must empirically prove this implemented path; retrying arbitrary mirrors remains explicitly unsupported as a reproducibility mechanism.
 
 ## 3. AUR boundary
 
@@ -179,6 +179,8 @@ The first-ISO package/build system must preserve these invariants:
 - no developer-machine convenience package silently promoted into the supported image;
 - no manual post-install copying used to satisfy a blocking first-ISO component;
 - package/source provenance remains inspectable from repository-owned configuration and build metadata;
+- one native build must not mix repository databases from one rolling state with package files from another; the supported path requires a passing run-owned `repository-closure.json` before `buildiso` output can be accepted;
+- verified warm-cache reuse is identity-based: exact package filename and repository SHA-256 must match, and the native cache is read-only once construction begins;
 - the repository database used to resolve a native run must be coherent with the package files consumed by that same run; stale prepared pacman metadata may not be paired with newer rolling-mirror contents;
 - the exact transitive native package closure must be verified or prefetched before expensive ISO construction is allowed to depend on it;
 - a missing package fails clearly or triggers a documented component decision rather than silently changing source.

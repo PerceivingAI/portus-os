@@ -632,6 +632,7 @@ def materialize(repo: Path, run_id: str, work_root: Path, evidence_path: Path) -
             "architecture": "x86_64",
             "init": "openrc",
             "workspace_profiles_dir": "iso-profiles",
+            "stable_pacman_config": "/usr/share/artools/pacman.conf.d/iso-x86_64.conf",
             "output_filename_prefix": "artix-portus-openrc-",
             "live_boot_kernel_package": "linux-lts",
             "output_filename_suffix": "-x86_64.iso",
