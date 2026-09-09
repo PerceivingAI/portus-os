@@ -1272,6 +1272,7 @@ fn validate_artools_profile_sources(repo_root: &Path, adapter: &ArtoolsAdapter) 
     let expected_live_only = BTreeSet::from([
         "artix-live-base".to_string(),
         "artix-live-openrc".to_string(),
+        "artix-grub-live".to_string(),
         "calamares".to_string(),
     ]);
     let expected_installed: BTreeSet<_> = expected_packages

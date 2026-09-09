@@ -7,7 +7,6 @@ packages-xlibre: []
 packages-misc: []
 packages-boot:
   - grub
-  - artix-grub-live
   - iso-initcpio
   - memtest86+
   - mkinitcpio
