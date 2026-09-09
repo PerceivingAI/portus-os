@@ -69,6 +69,7 @@ livefs:
   packages:
     - artix-live-base
     - artix-live-openrc
+    - artix-grub-live
     - calamares
   packages-init:
     openrc: []
