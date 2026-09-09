@@ -161,7 +161,7 @@ packages:
     profile: graphical
     package:
       resolution: locked
-      names: [xorg-server, xorg-xinit, xorg-xprop, i3-wm, alacritty, mesa, maim, xdotool, polkit]
+      names: [xorg-server, xorg-xinit, xorg-xprop, i3-wm, alacritty, mesa, maim, xdotool, polkit, gnu-free-fonts]
       unresolved_reason: null
       required_gate: L2
 

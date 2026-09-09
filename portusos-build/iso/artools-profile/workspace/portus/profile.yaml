@@ -61,6 +61,7 @@ rootfs:
     - polkit
     - ungoogled-chromium
     - xdg-utils
+    - gnu-free-fonts
   packages-init:
     openrc: []
 
