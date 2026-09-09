@@ -7,7 +7,7 @@ source:
   repository: https://github.com/PerceivingAI/portus-bridge.git
   revision:
     resolution: locked
-    value: 1c244da87a71f00b90e66ec4851ebf0f9b69b3f3
+    value: 1c244da4259aaa296bc61a6b575f2a47980368b5
     required_gate: L2
   source_tree_required_clean: true
 

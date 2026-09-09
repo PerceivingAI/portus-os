@@ -31,7 +31,7 @@ PortusOS bundles:
 
 
 
-Current first-ISO frozen inputs are tunnel-client `0.0.13` and Portus MCP source revision `6821bd040212f71ee4c4240751e18d6e3c545367`; the exact tunnel-client Linux x86_64 digest remains machine-owned by the component contract rather than duplicated here.
+Current first-ISO frozen inputs are tunnel-client `0.0.13` and Portus MCP source revision `6821bd0eb98208c21dd4ef45c3d8c7b6b4fd8bc6`; the exact tunnel-client Linux x86_64 digest remains machine-owned by the component contract rather than duplicated here.
 
 The pinned tunnel-client release is recorded in `portusos-build/components/tunnel-client.yaml`. The binary also carries OpenAI's Codex tunnel plugin bundle; after Codex login, the optional setup path may run:
 
