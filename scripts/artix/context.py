@@ -1860,7 +1860,15 @@ def render_frozen_pacman_config(original: str, local_server: str) -> str:
     if first_repo is None:
         raise RuntimeError("stable artools pacman configuration has no enabled repositories")
     prefix = "\n".join(lines[:first_repo]).rstrip() + "\n\n"
-    repositories = "\n\n".join(f"[{name}]\nServer = {local_server}" for name in FROZEN_REPOSITORIES)
+    if local_server.startswith("file://"):
+        repositories = "\n\n".join(
+            f"[{name}]\nSigLevel = PackageOptional\nServer = {local_server}"
+            for name in FROZEN_REPOSITORIES
+        )
+    else:
+        repositories = "\n\n".join(
+            f"[{name}]\nServer = {local_server}" for name in FROZEN_REPOSITORIES
+        )
     return prefix + repositories + "\n"
 
 
