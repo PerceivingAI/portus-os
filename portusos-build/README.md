@@ -45,7 +45,7 @@ The `portus-build` crate consumes that source-valid graph. `builder/layout.yaml`
 
 ## Config-driven build-iteration harness
 
-`BUILD_HARNESS.md` is authoritative for repeated ISO-build orchestration and usage.
+`docs/BUILD_HARNESS.md` is authoritative for repeated ISO-build orchestration and usage.
 
 Every normal ISO attempt is driven by a versioned repository config. The canonical first interactive ISO request is:
 
@@ -59,7 +59,7 @@ Normal Linux invocation:
 ./portusos-build/build-iso.sh --config portusos-build/configs/first-live.json
 ```
 
-The harness validates the config, snapshots its exact bytes as `build-config.json`, records its SHA-256 and resolved values in the timestamped log/run metadata, hashes every tracked repository input, runs the mandatory non-skippable environment gate from `BUILD_REQUIREMENTS.md` into `preflight.json`, then executes the configured repository-test preflight depth. Only an environment without `BLOCK` results may reach contract/build-plan generation and the native Artix adapter; success still requires exactly one ISO.
+The harness validates the config, snapshots its exact bytes as `build-config.json`, records its SHA-256 and resolved values in the timestamped log/run metadata, hashes every tracked repository input, runs the mandatory non-skippable environment gate from `docs/BUILD_REQUIREMENTS.md` into `preflight.json`, then executes the configured repository-test preflight depth. Only an environment without `BLOCK` results may reach contract/build-plan generation and the native Artix adapter; success still requires exactly one ISO.
 
 Every successful, failed, or blocked attempt is preserved under:
 
@@ -75,7 +75,7 @@ Validate a config without building:
 python -B scripts/build_iteration.py --check-config portusos-build/configs/first-live.json
 ```
 
-The build config is an invocation spec; it selects existing composition/profile authorities rather than duplicating package or product decisions. See `BUILD_HARNESS.md` for the config schema, run lifecycle, native-adapter environment contract, failure semantics, regression workflow, and candidate handoff.
+The build config is an invocation spec; it selects existing composition/profile authorities rather than duplicating package or product decisions. See `docs/BUILD_HARNESS.md` for the config schema, run lifecycle, native-adapter environment contract, failure semantics, regression workflow, and candidate handoff.
 
 ## Validation harness
 

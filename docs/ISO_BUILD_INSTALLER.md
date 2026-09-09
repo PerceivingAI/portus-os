@@ -10,8 +10,8 @@
 **Package/supply-chain authority:** `docs/PACKAGE_POLICY.md`
 **Service authority:** `docs/OPENRC_SERVICES.md`
 **GUI/session authority:** `docs/GUI_SYSTEM.md`
-**Repeated-build harness authority:** `BUILD_HARNESS.md`
-**Build-environment requirements authority:** `BUILD_REQUIREMENTS.md`
+**Repeated-build harness authority:** `docs/BUILD_HARNESS.md`
+**Build-environment requirements authority:** `docs/BUILD_REQUIREMENTS.md`
 
 ## 1. Purpose and authority
 

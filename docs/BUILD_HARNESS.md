@@ -8,7 +8,7 @@
 
 **ISO architecture authority:** `docs/ISO_BUILD_INSTALLER.md`
 
-**Build-environment requirements authority:** `BUILD_REQUIREMENTS.md`
+**Build-environment requirements authority:** `docs/BUILD_REQUIREMENTS.md`
 
 **First-ISO acceptance authority:** `docs/ACCEPTANCE.md`
 
@@ -412,9 +412,9 @@ The outer host is **not** the PortusOS distribution authority. Artix package/roo
 
 ### Mandatory environment preflight
 
-The Linux wrapper first performs the irreducible bootstrap guard from `BUILD_REQUIREMENTS.md`: Python 3.10+ and Git must exist before a traceable run can be allocated. A failure there is reported directly because the ledger cannot yet exist.
+The Linux wrapper first performs the irreducible bootstrap guard from `docs/BUILD_REQUIREMENTS.md`: Python 3.10+ and Git must exist before a traceable run can be allocated. A failure there is reported directly because the ledger cannot yet exist.
 
-Every native build attempt runs `scripts/build_environment_preflight.py` regardless of `build.preflight`. `BUILD_REQUIREMENTS.md` is authoritative for what it checks. The checker writes `preflight.json`, emits stable `PASS`/`WARN`/`BLOCK` results into `build.log`, records its SHA-256 in `build-run.json`, and returns before configurable repository tests/native construction when a hard requirement is blocked. `build.preflight=skip` skips repository test depth only; it cannot disable this environment gate.
+Every native build attempt runs `scripts/build_environment_preflight.py` regardless of `build.preflight`. `docs/BUILD_REQUIREMENTS.md` is authoritative for what it checks. The checker writes `preflight.json`, emits stable `PASS`/`WARN`/`BLOCK` results into `build.log`, records its SHA-256 in `build-run.json`, and returns before configurable repository tests/native construction when a hard requirement is blocked. `build.preflight=skip` skips repository test depth only; it cannot disable this environment gate.
 
 For the isolated-Artix checks, the preflight consumes the repository-owned bootstrap contract at `portusos-build/artix/bootstrap.json` and the persistent readiness evidence produced by `scripts/artix/context.py`. The verified ISO seed can be checked without privilege. A healthy prepared state means the verified Artix upper/evidence exists **and no Artix mount is exposed in the outer VM**. If preparation is required, preflight reports `sudo python -B scripts/artix/context.py prepare`; that action now mounts the Artix seed/OverlayFS only inside a private mount namespace, persists the upper/evidence, and exits with no global mount tree left behind.
 

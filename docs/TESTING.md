@@ -129,7 +129,7 @@ Normal ISO construction goes through:
 bash portusos-build/build-iso.sh --config portusos-build/configs/first-live.json
 ```
 
-The harness snapshots and hashes the config, runs the mandatory `BUILD_REQUIREMENTS.md` preflight, validates source contracts, stages the exact payload, invokes the bounded native Artix adapter, captures logs/results/cleanup evidence and requires exactly one ISO artifact on success.
+The harness snapshots and hashes the config, runs the mandatory `docs/BUILD_REQUIREMENTS.md` preflight, validates source contracts, stages the exact payload, invokes the bounded native Artix adapter, captures logs/results/cleanup evidence and requires exactly one ISO artifact on success.
 
 A config with release-candidate semantics additionally requires the release-resolved source graph. Unresolved release facts must fail closed rather than being guessed.
 

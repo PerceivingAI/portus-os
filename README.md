@@ -68,9 +68,7 @@ PortusOS does **not** try to wrap every normal Linux or Codex capability. It add
 | `docs/` | Public architecture, security, build, validation and operational authorities |
 | `oss/` | Release policy, third-party inventory and public schemas |
 | `release/` | Public release-key and verification structure |
-
-For the full documentation authority map, start with [`DOCUMENTATION.md`](DOCUMENTATION.md). Coding agents should also read [`AGENTS.md`](AGENTS.md).
-
+For the full documentation authority map, start with [`docs/PROJECT.md`](docs/PROJECT.md). Coding agents should also read [`AGENTS.md`](AGENTS.md).
 ## Build and test
 
 ### Source checks
@@ -94,9 +92,7 @@ bash scripts/test.sh build-skeleton
 Test categories and host-safe boundaries are documented in [`docs/TESTING.md`](docs/TESTING.md).
 
 ### Canonical ISO build
-
-Read [`BUILD_REQUIREMENTS.md`](BUILD_REQUIREMENTS.md) and [`BUILD_HARNESS.md`](BUILD_HARNESS.md) first.
-
+Read [`docs/BUILD_REQUIREMENTS.md`](docs/BUILD_REQUIREMENTS.md) and [`docs/BUILD_HARNESS.md`](docs/BUILD_HARNESS.md) first.
 On the supported x86_64 Linux build host:
 
 ```bash
@@ -128,9 +124,7 @@ The ISO pipeline is deliberately fail-closed. Before `buildiso` may start, the n
 9. a live pre-exec guard rechecks the package ledger, package hashes, repository DB hashes, pacman-config hash, repository links, and mount state immediately before launching `buildiso`.
 
 If even one frozen package remains unresolved, `buildiso` is unreachable.
-
-The detailed implementation and evidence contract live in [`BUILD_HARNESS.md`](BUILD_HARNESS.md), [`docs/ISO_BUILD_INSTALLER.md`](docs/ISO_BUILD_INSTALLER.md), and [`docs/PACKAGE_POLICY.md`](docs/PACKAGE_POLICY.md).
-
+The detailed implementation and evidence contract live in [`docs/BUILD_HARNESS.md`](docs/BUILD_HARNESS.md), [`docs/ISO_BUILD_INSTALLER.md`](docs/ISO_BUILD_INSTALLER.md), and [`docs/PACKAGE_POLICY.md`](docs/PACKAGE_POLICY.md).
 ## Validation and release flow
 
 PortusOS separates **building**, **accepting**, and **publishing** an ISO:
@@ -189,9 +183,7 @@ The reference validation VM is **4 vCPU / 8 GiB RAM / 80 GiB disk / UEFI**. A se
 - [`docs/HARDWARE.md`](docs/HARDWARE.md) — VMware-first hardware boundary.
 - [`docs/OPENRC_SERVICES.md`](docs/OPENRC_SERVICES.md) — service ownership.
 - [`docs/GUI_SYSTEM.md`](docs/GUI_SYSTEM.md) — graphical session architecture.
-
-See [`DOCUMENTATION.md`](DOCUMENTATION.md) for the complete index instead of treating this README as an exhaustive documentation list.
-
+See [`docs/PROJECT.md`](docs/PROJECT.md) for the product definition and authoritative decision register.
 ## Design principles
 
 - **Agent-first, not agent-only.** Humans retain direct administrative and recovery authority.

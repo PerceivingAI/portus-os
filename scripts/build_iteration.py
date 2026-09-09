@@ -2191,7 +2191,7 @@ def main() -> int:
         print(json.dumps({"valid": True, "path": relative, "sha256": digest, "config": config}, indent=2, sort_keys=True))
         return 0
     if not args.config:
-        print("--config is required; see BUILD_HARNESS.md", file=sys.stderr)
+        print("--config is required; see docs/BUILD_HARNESS.md", file=sys.stderr)
         return EXIT_USAGE
     try:
         config, _, config_relative, config_bytes, config_sha256 = load_build_config(repo, args.config)

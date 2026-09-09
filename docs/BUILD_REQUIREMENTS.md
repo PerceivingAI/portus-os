@@ -6,7 +6,7 @@
 
 **Last reconciled:** 2026-08-29T09:40:32Z
 
-**Build-harness authority:** `BUILD_HARNESS.md`
+**Build-harness authority:** `docs/BUILD_HARNESS.md`
 
 **ISO architecture authority:** `docs/ISO_BUILD_INSTALLER.md`
 
@@ -92,7 +92,7 @@ Python 3.10 is the minimum harness language baseline because the harness uses Py
 
 The build harness must not depend on an IDE, graphical desktop, browser, or VMware merely to start.
 
-Because Python and Git are required before a traceable timestamped run can be allocated, `portusos-build/build-iso.sh` performs a minimal bootstrap guard for Python 3.10+ and Git. Missing bootstrap prerequisites return a direct `BUILD_REQUIREMENTS.md` error before `build-run.json`/`preflight.json` can exist. Once the Python harness starts, all remaining native-build readiness belongs to the mandatory structured environment preflight.
+Because Python and Git are required before a traceable timestamped run can be allocated, `portusos-build/build-iso.sh` performs a minimal bootstrap guard for Python 3.10+ and Git. Missing bootstrap prerequisites return a direct `docs/BUILD_REQUIREMENTS.md` error before `build-run.json`/`preflight.json` can exist. Once the Python harness starts, all remaining native-build readiness belongs to the mandatory structured environment preflight.
 
 ---
 
@@ -539,7 +539,7 @@ Warnings must be recorded in the run ledger rather than lost in terminal output.
 
 ## 14. Relationship to harness test preflight
 
-`BUILD_HARNESS.md` currently exposes config values:
+`docs/BUILD_HARNESS.md` currently exposes config values:
 
 ```text
 build.preflight = standard | full | skip

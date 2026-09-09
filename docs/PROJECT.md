@@ -17,7 +17,7 @@ It defines:
 
 Related authority:
 
-- `DOCUMENTATION.md` is the public navigation and authority map for the repository; public scope and deferred first-release capabilities are captured by this document, `docs/ACCEPTANCE.md`, and `KNOWN_LIMITATIONS.md`.
+- this document is the authoritative product definition and decision register for PortusOS; public scope and deferred first-release capabilities are captured by this document, `docs/ACCEPTANCE.md`, and `KNOWN_LIMITATIONS.md`.
 - `docs/ACCEPTANCE.md` is authoritative for the exact first-ISO acceptance contract: reference VMware resources, supported boot/install/access path, required real versus minimal implementation, blocking demonstrations, exclusions, and acceptance matrix.
 - `docs/POLICY.md` is authoritative for the Master Portus Linux-user model, administrator/root authority, permission bundles, granular post-install policy, cross-user isolation, delegated-agent sandboxing, root-equivalent classification, and local principal enforcement.
 - `docs/POLICY_IMPLEMENTATION.md` is authoritative for the concrete first-ISO Linux policy/elevation mapping: installer bundle defaults, explicit grant classes, `portus-privd`, root-owned policy, typed privileged operations, root-equivalent inventory and root-only administrator mutation.
@@ -46,7 +46,7 @@ Related authority:
 - `docs/OPENRC_SERVICES.md` is authoritative for the first-ISO service/session lifecycle ownership boundary, OpenRC-native supervision direction, Portus health/task non-supervisor boundary, and the remaining exact service-graph research.
 - `docs/GUI_SYSTEM.md` is authoritative for the locked first-ISO conditional-`startx`/`dbus-run-session`/minimal-i3 graphical-session baseline, session-owned helpers, visual fallback, and remaining Artix/VMware GUI verification.
 - `docs/UPDATES_RECOVERY.md` is authoritative for explicit first-ISO managed updates, Artix/pacman ownership, preflight/migration safety, no-auto-reboot behavior, post-update health proof, bounded update-specific recovery state, and the deferred general-backup/automatic-rollback boundary.
-- `BUILD_HARNESS.md` and `BUILD_REQUIREMENTS.md` own the supported public build path and build-host requirements.
+- `docs/BUILD_HARNESS.md` and `docs/BUILD_REQUIREMENTS.md` own the supported public build path and build-host requirements.
 - `docs/VALIDATION.md` and `docs/RELEASE.md` own candidate acceptance and publication; private development planning/history is intentionally outside the public repository.
 
 ## 2. Product definition
@@ -925,7 +925,7 @@ At the time of this update:
 - `OKF.md` defines durable knowledge policy.
 - this document defines the clarified agent-operated OS product.
 - `docs/STRUCTURE.md` defines the corresponding ownership and runtime structure.
-- public build and release work is driven by the checked-in build contracts, `BUILD_HARNESS.md`, `docs/ACCEPTANCE.md`, `docs/VALIDATION.md`, and `docs/RELEASE.md`;
+- public build and release work is driven by the checked-in build contracts, `docs/BUILD_HARNESS.md`, `docs/ACCEPTANCE.md`, `docs/VALIDATION.md`, and `docs/RELEASE.md`;
 - the Portus-owned Rust workspace, Linux IPC/runtime integration tests, machine-readable build contracts, installer/storage integration, Artix build adapter, candidate/evidence harness, OSS audit tooling and release tooling are implemented and testable from this repository. Exact release readiness remains conditional on the supported Artix/native ISO build and the full VMware candidate validation evidence;
 - PortusBrowser is a required bundled capability sourced from its independent project; this repository owns its packaging, lifecycle, capability, task, artifact, health, recovery, and release integration rather than reimplementing its browser domain.
 - PortusWindow and other Portus applications remain separate capability projects integrated according to their release scope.

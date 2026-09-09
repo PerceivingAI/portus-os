@@ -7,13 +7,10 @@ This file is the public onboarding entry point for coding agents working in the 
 PortusOS is an Artix/OpenRC, Codex-first, agent-operated Linux distribution. The repository contains both the Portus-owned Rust runtime and the public ISO/installer/build/validation machinery.
 
 ## Read first
-
 1. `README.md`
-2. `DOCUMENTATION.md`
-3. `docs/PROJECT.md`
-4. `docs/ACCEPTANCE.md`
-5. the specialized authority for the subsystem being changed
-
+2. `docs/PROJECT.md`
+3. `docs/ACCEPTANCE.md`
+4. the specialized authority for the subsystem being changed
 Do not invent architecture from filenames. Public documentation and machine-readable contracts are intentional authorities.
 
 ## Main source areas
@@ -37,9 +34,7 @@ bash scripts/test.sh build-skeleton
 Use narrower test categories from `scripts/test.sh` while iterating, but run the relevant broader checks before considering a change complete.
 
 ## Canonical ISO build
-
-Read `BUILD_REQUIREMENTS.md` and `BUILD_HARNESS.md` first.
-
+Read `docs/BUILD_REQUIREMENTS.md` and `docs/BUILD_HARNESS.md` first.
 ```bash
 bash portusos-build/build-iso.sh --config portusos-build/configs/first-live.json
 ```

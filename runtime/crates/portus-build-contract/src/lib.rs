@@ -1132,7 +1132,8 @@ fn validate_codex(repo_root: &Path, contract: &CodexContract) -> ContractResult<
     let selected_version = contract.pin.version.as_deref();
     if contract.id != "codex"
         || contract.source_class != SourceClass::ApprovedExternal
-        || contract.authority != "CODEX_UPDATES.md"
+        || (contract.authority != "CODEX_UPDATES.md"
+            && contract.authority != "notes/CODEX_UPDATES.md")
         || contract.distribution.kind != "official-standalone-package"
         || contract.distribution.executable != "/usr/local/bin/codex"
         || contract.distribution.package_root
@@ -1156,7 +1157,8 @@ fn validate_codex(repo_root: &Path, contract: &CodexContract) -> ContractResult<
             "Codex behavioral evidence baseline must remain the audited 0.149.0 source baseline",
         );
     }
-    let codex_doc = fs::read_to_string(repo_root.join("CODEX_UPDATES.md"))?;
+    let codex_doc = fs::read_to_string(repo_root.join("notes/CODEX_UPDATES.md"))
+        .or_else(|_| fs::read_to_string(repo_root.join("CODEX_UPDATES.md")))?;
     if !codex_doc.contains("**Behavioral evidence baseline:** `0.149.0`")
         || !codex_doc.contains("**Selected first-ISO build pin:** `0.150.1`")
     {
@@ -1235,7 +1237,8 @@ fn validate_portus_mcp(repo_root: &Path, contract: &PortusMcpContract) -> Contra
     require_schema(contract.schema_version, PORTUS_MCP_COMPONENT_CONTRACT)?;
     if contract.id != "portus-mcp"
         || contract.source_class != SourceClass::PortusOwned
-        || contract.authority != "TUNNEL_INSTRUCTIONS.md"
+        || (contract.authority != "TUNNEL_INSTRUCTIONS.md"
+            && contract.authority != "docs/TUNNEL_INSTRUCTIONS.md")
         || contract.source.repository != "https://github.com/PerceivingAI/portus-mcp.git"
         || !contract.source.source_tree_required_clean
         || contract.runtime.install_root != "/opt/portus/portus-mcp"
@@ -1280,7 +1283,8 @@ fn validate_tunnel_client(contract: &TunnelClientContract) -> ContractResult<()>
     require_schema(contract.schema_version, TUNNEL_CLIENT_COMPONENT_CONTRACT)?;
     if contract.id != "tunnel-client"
         || contract.source_class != SourceClass::ApprovedExternal
-        || contract.authority != "TUNNEL_INSTRUCTIONS.md"
+        || (contract.authority != "TUNNEL_INSTRUCTIONS.md"
+            && contract.authority != "docs/TUNNEL_INSTRUCTIONS.md")
         || contract.source.repository != "https://github.com/openai/tunnel-client.git"
         || contract.runtime.executable != "/usr/local/bin/tunnel-client"
         || contract.runtime.default_profile != "portus-local"

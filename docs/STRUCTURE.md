@@ -16,7 +16,7 @@ This document defines the intended ownership boundaries and structural direction
 
 It is an aspirational structure, not a claim that these files or components already exist.
 
-`docs/PROJECT.md` controls product intent and public scope. `DOCUMENTATION.md` is the public documentation/authority map. `docs/ACCEPTANCE.md` controls the exact first-release acceptance contract, reference target, required proofs, exclusions, and blocking acceptance matrix. `docs/POLICY.md` controls Master Portus Linux-user identity, administrator/root authority, permission bundles, granular policy, cross-user isolation, delegated-agent sandboxing, root-equivalent classification, and local principal enforcement. `docs/SECRETS.md` controls protected reusable credentials and secret-backed operations. `docs/RUNTIME.md` controls the PortusOS runtime, `portusd`, Portus OS CLI relationship, local IPC, and provider/runtime failure boundaries. `docs/STATE.md` controls SQLite and Portus-owned mutable-state boundaries. `docs/TASKS.md` controls Master execution routing, Portus task promotion, task identity/lifecycle, execution relationships, cancellation/retry, results, cleanup, and reconciliation. `docs/EVENTS_AUDIT.md` controls significant-event persistence/retention, live wake-up/stream semantics, security-audit records, redaction, attribution, and audit storage boundaries. `docs/CAPABILITIES.md` controls registered capability/provider/interface/resource/operation identity, manifests, direct provider use, versioning, lifecycle/health/policy integration, task affordances, compatibility and uninstall history. `CODEX_UPDATES.md` controls Codex details subject to the POLICY/SECRETS/TASKS authority boundaries. `docs/CONTROL_PLANE.md` controls the PortusOS layer's scope and non-duplication rule. `OKF.md` controls durable knowledge. `docs/SYSTEM_INDEX.md` controls the system-index and machine-map architecture. `docs/PORTUS_BROWSER.md` controls the required PortusBrowser integration baseline. `docs/SYSTEM_CAPABILITIES.md` controls the capability and installation inventory. `BUILD_HARNESS.md`, `docs/VALIDATION.md`, and `docs/RELEASE.md` control the supported public build, acceptance, and publication flow.
+`docs/PROJECT.md` controls product intent, public scope, and authoritative decision register. `docs/ACCEPTANCE.md` controls the exact first-release acceptance contract, reference target, required proofs, exclusions, and blocking acceptance matrix. `docs/POLICY.md` controls Master Portus Linux-user identity, administrator/root authority, permission bundles, granular policy, cross-user isolation, delegated-agent sandboxing, root-equivalent classification, and local principal enforcement. `docs/SECRETS.md` controls protected reusable credentials and secret-backed operations. `docs/RUNTIME.md` controls the PortusOS runtime, `portusd`, Portus OS CLI relationship, local IPC, and provider/runtime failure boundaries. `docs/STATE.md` controls SQLite ownership and state classes. `docs/TASKS.md` controls outer execution routing. `docs/CAPABILITIES.md` controls registered capability providers. `docs/CONTROL_PLANE.md` controls the non-duplication rule. `docs/SYSTEM_INDEX.md` controls the operational machine graph. `docs/PORTUS_BROWSER.md` controls bundled browser automation. `docs/SYSTEM_CAPABILITIES.md` controls system capabilities. `docs/ISO_BUILD_INSTALLER.md` controls the first-ISO `artools`/Calamares architecture. `docs/BOOT_STORAGE_RECOVERY.md` controls storage/recovery. `docs/HARDWARE.md` controls the hardware boundary. `docs/PACKAGE_POLICY.md` controls package sourcing. `docs/OPENRC_SERVICES.md` controls service ownership. `docs/GUI_SYSTEM.md` controls graphical session architecture. `docs/UPDATES_RECOVERY.md` controls update/recovery boundaries. `docs/BUILD_HARNESS.md` and `docs/BUILD_REQUIREMENTS.md` control repeated build orchestration and environment readiness. `docs/VALIDATION.md` and `docs/RELEASE.md` control candidate verification and publication.
 
 ## 2. Structural principles
 
@@ -437,10 +437,9 @@ Owns:
 - owner decisions;
 - product and release boundaries.
 
-### `DOCUMENTATION.md`
+### `docs/TUNNEL_INSTRUCTIONS.md`
 
-Owns the public documentation index, authority routing, and the separation between public product/build/release documentation and private development history.
-
+Owns the optional Portus MCP + OpenAI `tunnel-client` remote-tunnel setup procedure.
 ### `docs/ACCEPTANCE.md`
 
 Owns:
@@ -480,9 +479,13 @@ Owns execution-surface routing, the Portus task-promotion boundary, task identit
 
 Owns the implementation test categories, host-safety rules, common check/build/test entry points, false-green prohibition, and separation between host-safe tests and graphical/VM acceptance.
 
-### `BUILD_HARNESS.md`
+### `docs/BUILD_HARNESS.md`
 
 Owns the supported repeated ISO-build orchestration, build configuration, mandatory preflight, staging, native Artix adapter boundary, run-scoped evidence, failure semantics, and candidate handoff.
+
+### `docs/BUILD_REQUIREMENTS.md`
+
+Owns the supported build-host prerequisites and mandatory environment preflight requirements.
 
 ### `AGENTS.md`
 
@@ -822,7 +825,7 @@ Installer/build modules must not maintain hidden independent package, service, s
 
 ### ISO profile
 
-`iso/profile.yaml` owns the image-level artools/Calamares composition and the native x86_64 Linux outer-host + isolated verified Artix build-context requirement. `portusos-build/artix/bootstrap.json` owns the locked Artix live seed/rootfs extent and bounded OverlayFS context layout; `scripts/artix/context.py` verifies, mounts, probes and tears down that generated context without installing Artix packages into the outer host. `BUILD_HARNESS.md` owns repeated build orchestration; `configs/first-live.json` is the canonical iterative request. The deterministic layer is implemented through `portus-build`, `builder/layout.yaml`, `installer/responsibilities.yaml`, `iso/artools-profile/adapter.yaml`, the tracked `rootfs/overlay/` and `packages/local/` source boundaries, plus `build-iso.sh`/`.ps1`. Release-critical Artix/package/installer facts remain fail-closed `linux-verified` inputs until established by the isolated verified Artix path.
+`iso/profile.yaml` owns the image-level artools/Calamares composition and the native x86_64 Linux outer-host + isolated verified Artix build-context requirement. `portusos-build/artix/bootstrap.json` owns the locked Artix live seed/rootfs extent and bounded OverlayFS context layout; `scripts/artix/context.py` verifies, mounts, probes and tears down that generated context without installing Artix packages into the outer host. `docs/BUILD_HARNESS.md` owns repeated build orchestration; `configs/first-live.json` is the canonical iterative request. The deterministic layer is implemented through `portus-build`, `builder/layout.yaml`, `installer/responsibilities.yaml`, `iso/artools-profile/adapter.yaml`, the tracked `rootfs/overlay/` and `packages/local/` source boundaries, and `build-iso.sh`/`.ps1`.
 
 ### Installer
 
@@ -951,7 +954,7 @@ Configuration needs one owner and explicit precedence.
 | Configuration | Owner | Primary consumers |
 | --- | --- | --- |
 | Product and owner decisions | `docs/PROJECT.md` | maintainers and implementation planning |
-| Public documentation and authority map | `DOCUMENTATION.md` | users, maintainers and coding agents |
+| Product definition and decision register | `docs/PROJECT.md` | users, maintainers and coding agents |
 | First ISO acceptance contract | `docs/ACCEPTANCE.md` | implementation planning, validation, release engineering |
 | First ISO executable validation contract | `docs/VALIDATION.md` | validation harness and release engineering |
 | Candidate/release artifact contract | `docs/RELEASE.md` | build metadata, checksums, provenance, release engineering |
@@ -1394,6 +1397,6 @@ Forward changes should therefore:
 
 1. update the specialized public authority when a product or technical contract changes;
 2. update machine-readable build/runtime contracts in the same change when they encode that decision;
-3. keep `DOCUMENTATION.md` and `README.md` aligned with the public source tree;
+3. keep public documentation and `README.md` aligned with the public source tree;
 4. keep private planning, historical build journals, and maintainer-only release staging outside the public repository;
 5. preserve `docs/ACCEPTANCE.md`, `docs/VALIDATION.md`, and `docs/RELEASE.md` as the acceptance/publication boundary.

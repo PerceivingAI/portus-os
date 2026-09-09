@@ -1,7 +1,7 @@
 schema_version: 1
 id: codex
 source_class: approved-external
-authority: CODEX_UPDATES.md
+authority: notes/CODEX_UPDATES.md
 
 distribution:
   kind: official-standalone-package

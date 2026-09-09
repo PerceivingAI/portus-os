@@ -35,3 +35,6 @@ __pycache__/
 # Editor-local state
 .idea/
 .vscode/
+
+# Additional
+notes/
