@@ -62,6 +62,7 @@ rootfs:
     - ungoogled-chromium
     - xdg-utils
     - gnu-free-fonts
+    - artix-grub-live
   packages-init:
     openrc: []
 
@@ -69,7 +70,6 @@ livefs:
   packages:
     - artix-live-base
     - artix-live-openrc
-    - artix-grub-live
     - calamares
   packages-init:
     openrc: []
