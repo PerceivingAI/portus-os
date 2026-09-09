@@ -560,7 +560,7 @@ def stage_portus_bridge(repo: Path, root_overlay: Path, env: dict[str, str]) -> 
         git_exact_checkout(str(local_source), PORTUS_BRIDGE_REVISION, cache, repo=repo, env=env)
     else:
         git_exact_checkout("https://github.com/PerceivingAI/portus-bridge.git", PORTUS_BRIDGE_REVISION, cache, repo=repo, env=env)
-    run_checked(["cargo", "build", "--locked", "--release"], cwd=cache, env=env, label="Portus Bridge build")
+    run_checked(["cargo", "build", "--release"], cwd=cache, env=env, label="Portus Bridge build")
     binary = cache / "target/release/portus-bridge"
     if not binary.is_file():
         raise RuntimeError("Portus Bridge build failed to produce release binary")

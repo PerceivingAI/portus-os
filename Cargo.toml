@@ -25,6 +25,9 @@ members = [
     "runtime/crates/portus-api",
     "runtime/crates/portus-auth",
 ]
+exclude = [
+    "portusos-build",
+]
 
 [workspace.package]
 version = "0.1.0"
