@@ -33,7 +33,8 @@ CODEX_SUMS_SHA256 = "5580070dd9e1c06a603421111f32aa107fd77de2ab306986c11a26166b7
 CODEX_PACKAGE_ROOT = f"usr/lib/codex/standalone/releases/{CODEX_VERSION}-{CODEX_TARGET}"
 CODEX_SYMLINK_TARGET = f"../../lib/codex/standalone/releases/{CODEX_VERSION}-{CODEX_TARGET}/bin/codex"
 PORTUS_BROWSER_REVISION = "c263c3997b4e6f2f7df5922e062a9e949e22f755"
-PORTUS_MCP_REVISION = "a963c56a72ca106cbac3b848256bb393fb9dc2da"
+PORTUS_MCP_REVISION = "6821bd040212f71ee4c4240751e18d6e3c545367"
+PORTUS_BRIDGE_REVISION = "1c244da87a71f00b90e66ec4851ebf0f9b69b3f3"
 TUNNEL_VERSION = "0.0.13"
 TUNNEL_ASSET = "tunnel-client-v0.0.13-linux-amd64.zip"
 TUNNEL_SHA256 = "e71f37b424126513173d5e3590687c0b5ccf6e8ef3fba900104d1f8c60dad906"
@@ -294,6 +295,7 @@ def assert_contract_text(repo: Path) -> None:
         ),
         "portusos-build/components/portus-browser.yaml": (f"value: {PORTUS_BROWSER_REVISION}",),
         "portusos-build/components/portus-mcp.yaml": (f"value: {PORTUS_MCP_REVISION}",),
+        "portusos-build/components/portus-bridge.yaml": (f"value: {PORTUS_BRIDGE_REVISION}",),
         "portusos-build/components/tunnel-client.yaml": (
             f'version: "{TUNNEL_VERSION}"',
             f"linux_amd64_asset: {TUNNEL_ASSET}",
@@ -551,6 +553,28 @@ def stage_portus_mcp(repo: Path, root_overlay: Path, env: dict[str, str]) -> dic
         "tsx_sha256": sha256_file(tsx),
         "install_root": "/opt/portus/portus-mcp",
     }
+def stage_portus_bridge(repo: Path, root_overlay: Path, env: dict[str, str]) -> dict[str, Any]:
+    cache = repo / "portusos-build/cache/portus-bridge-build"
+    local_source = repo.parent / "portus-bridge"
+    if local_source.is_dir() and (local_source / "Cargo.toml").is_file():
+        git_exact_checkout(str(local_source), PORTUS_BRIDGE_REVISION, cache, repo=repo, env=env)
+    else:
+        git_exact_checkout("https://github.com/PerceivingAI/portus-bridge.git", PORTUS_BRIDGE_REVISION, cache, repo=repo, env=env)
+    run_checked(["cargo", "build", "--locked", "--release"], cwd=cache, env=env, label="Portus Bridge build")
+    binary = cache / "target/release/portus-bridge"
+    if not binary.is_file():
+        raise RuntimeError("Portus Bridge build failed to produce release binary")
+    target = root_overlay / "usr/local/bin/portus-bridge"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(binary, target)
+    target.chmod(0o755)
+    return {
+        "revision": PORTUS_BRIDGE_REVISION,
+        "binary_sha256": sha256_file(target),
+        "target": "/usr/local/bin/portus-bridge",
+    }
+
+
 
 
 def stage_tunnel_client(repo: Path, root_overlay: Path, env: dict[str, str], scratch: Path) -> dict[str, Any]:
@@ -607,7 +631,7 @@ def materialize(repo: Path, run_id: str, work_root: Path, evidence_path: Path) -
     browser = stage_portus_browser(repo, root_overlay, env)
     mcp = stage_portus_mcp(repo, root_overlay, env)
     tunnel = stage_tunnel_client(repo, root_overlay, env, scratch)
-
+    bridge = stage_portus_bridge(repo, root_overlay, env)
     revision = capture_checked(["git", "rev-parse", "HEAD"], cwd=repo, env=env, label="repository revision")
     dirty = capture_checked(["git", "status", "--porcelain=v1"], cwd=repo, env=env, label="repository cleanliness")
     if dirty:
@@ -643,6 +667,7 @@ def materialize(repo: Path, run_id: str, work_root: Path, evidence_path: Path) -
             "portus_browser": browser,
             "portus_mcp": mcp,
             "tunnel_client": tunnel,
+            "portus_bridge": bridge,
             "installer": installer,
         },
     }

@@ -21,7 +21,7 @@ This document is the dedicated PortusOS inventory for:
 - when the OS needs a stable adapter, policy boundary, registry, or control-plane implementation;
 - what must be researched before a package or component becomes locked.
 
-This document does not serve as the resolved package manifest. Public package/source intent is materialized at `portusos-build/packages/packages.yaml`. Selected top-level official-Artix package names and OpenRC service identities are represented in the build contracts, while Codex, PortusBrowser, Portus MCP and tunnel-client identities are frozen in their component contracts. Candidate-specific package versions/repository snapshot, licences/redistribution, installed compatibility and the validated multi-artifact `packages.lock.yaml` remain generated release evidence.
+This document does not serve as the resolved package manifest. Public package/source intent is materialized at `portusos-build/packages/packages.yaml`. Selected top-level official-Artix package names and OpenRC service identities are represented in the build contracts, while Codex, PortusBrowser, Portus MCP, Portus Bridge and tunnel-client identities are frozen in their component contracts. Candidate-specific package versions/repository snapshot, licences/redistribution, installed compatibility and the validated multi-artifact package lock belong to candidate and release evidence.
 
 When this document conflicts with older or informal package assumptions, this public capability inventory controls unless a more specialized current authority explicitly supersedes it.
 
@@ -271,9 +271,10 @@ Required on the first-ISO live environment:
 - Codex through the selected pinned standalone installation path;
 - Chromium as the mandatory first-ISO default HTTP/HTTPS browser and normal Codex ChatGPT-subscription authentication surface, with working `xdg-open`/localhost callback integration;
 - Node.js 20.9+ and npm for the canonical bundled Portus MCP runtime;
-- bundled Portus MCP at `/opt/portus/portus-mcp`, with local endpoint `http://127.0.0.1:8789/mcp`;
-- bundled OpenAI `tunnel-client` at `/usr/local/bin/tunnel-client`, including its Codex tunnel plugin payload;
-- a discoverable but optional `portus-local` tunnel setup path after Codex login; no tunnel ID/API key is embedded in the image;
+- bundled Portus MCP at `/opt/portus/portus-mcp`, with local endpoint `http://127.0.0.1:8789/mcp` (pinned to revision `6821bd0`);
+- bundled Portus Bridge at `/usr/local/bin/portus-bridge` (pinned to revision `1c244da`), providing direct, private remote agent access to Master Portus without whole-system SSH exposure;
+- bundled OpenAI `tunnel-client` at `/usr/local/bin/tunnel-client` (pinned to release `0.0.13`), including its Codex tunnel plugin payload;
+- a discoverable but optional tunnel setup path after Codex login; no tunnel ID/API key is embedded in the image;
 - `portus-os`, `portusd`, `portus-privd`, `portus-apid`, `portus-api`, `portus-auth`, `portus-bootstrap`, and `portus-master`;
 - the Master workspace/charter and enough Portus configuration for Codex to inspect the live machine and exercise available runtime/index/diagnostic surfaces;
 - Calamares as the supported installer framework;
@@ -380,10 +381,10 @@ Optional:
 
 Required payload / optional activation:
 
-- Portus MCP;
-- OpenAI Secure MCP Tunnel via bundled `tunnel-client`;
+- Portus MCP (pinned to revision `6821bd0`);
+- Portus Bridge (pinned to revision `1c244da`);
+- OpenAI Secure MCP Tunnel via bundled `tunnel-client` (pinned to release `0.0.13`);
 - the `portus-local` tunnel profile targeting `http://127.0.0.1:8789/mcp`, created only when the owner supplies tunnel credentials.
-
 Optional later additions:
 
 - Tailscale;

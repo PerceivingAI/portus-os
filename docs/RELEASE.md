@@ -358,6 +358,7 @@ Schema version 1 contains at least:
   "codex_pin_ref": "...",
   "portus_browser_pin_ref": "...",
   "portus_mcp_pin_ref": "...",
+  "portus_bridge_pin_ref": "...",
   "tunnel_client_pin_ref": "...",
   "validation_authority_revision": "<40 hex>",
   "release_authority_revision": "<40 hex>"

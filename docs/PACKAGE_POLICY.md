@@ -18,7 +18,7 @@ The core source decision is locked:
 
 If selected software is unavailable from the official Artix repositories, PortusOS does not automatically fall through to the AUR or to any other generic community source. That component becomes an explicit case-by-case sourcing decision.
 
-This policy does not prevent PortusOS from shipping Portus-owned software built from this project or other owned Portus projects, and it does not reopen already explicit upstream-distribution decisions such as the pinned Codex installation contract in `CODEX_UPDATES.md`.
+This policy does not prevent PortusOS from shipping Portus-owned software built from this project or other owned Portus projects, and it does not reopen already explicit upstream-distribution decisions such as the pinned Codex installation contract or the pinned component contracts for `portus-mcp`, `portus-bridge`, `portus-browser`, and `tunnel-client`.
 
 ## 2. Official Artix baseline
 
@@ -109,9 +109,7 @@ Their source, build, version, integrity and installation metadata must still be 
 
 Some selected software may already have an authoritative non-Artix distribution contract elsewhere in the repository.
 
-For example, `CODEX_UPDATES.md` owns the pinned standalone Codex installation policy. Such a contract is a component-specific decision and must satisfy this document's provenance, versioning, verification, licensing and update requirements; it does not weaken the no-AUR rule or create a general external-source preference.
-
-Any additional non-Artix component must receive equivalent explicit treatment before becoming supported.
+For example, `portusos-build/components/codex.yaml` owns the pinned standalone Codex installation policy (`0.150.1`), `portusos-build/components/portus-mcp.yaml` owns the pinned `portus-mcp` revision (`6821bd0`), `portusos-build/components/portus-bridge.yaml` owns the pinned `portus-bridge` revision (`1c244da`), `portusos-build/components/tunnel-client.yaml` owns the pinned `tunnel-client` release (`0.0.13`), and `portusos-build/components/portus-browser.yaml` owns the pinned `portus-browser` revision (`c263c39`). Such contracts are component-specific decisions and must satisfy this document's provenance, versioning, verification, licensing and update requirements; they do not weaken the no-AUR rule or create a general external-source preference.
 
 ## 7. Machine-readable package inventory
 

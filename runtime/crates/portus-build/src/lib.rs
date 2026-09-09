@@ -1499,7 +1499,7 @@ fn validate_calamares_adapter(repo_root: &Path) -> BuildResult<()> {
 
 fn validate_package_contract_for_planning(contract: &PackageContract) -> BuildResult<()> {
     if contract.schema_version != 1
-        || contract.packages.len() != 25
+        || contract.packages.len() != 26
         || contract.source_policies.len() != 5
     {
         return Err(BuildError::Invalid(
@@ -2101,7 +2101,7 @@ mod tests {
         let plan = build_plan(&repo_root(), 40 * 1024).unwrap();
         assert!(plan.source_valid);
         assert!(!plan.release_resolved);
-        assert_eq!(plan.packages.len(), 25);
+        assert_eq!(plan.packages.len(), 26);
         assert_eq!(plan.services.len(), 7);
         assert_eq!(plan.adapters.calamares_responsibility_count, 16);
         assert_eq!(plan.adapters.calamares_resolved_count, 16);

@@ -7,7 +7,7 @@ source:
   repository: https://github.com/PerceivingAI/portus-mcp.git
   revision:
     resolution: locked
-    value: a963c56a72ca106cbac3b848256bb393fb9dc2da
+    value: 6821bd040212f71ee4c4240751e18d6e3c545367
     required_gate: L2
   source_tree_required_clean: true
 

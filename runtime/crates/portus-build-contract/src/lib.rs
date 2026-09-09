@@ -25,6 +25,7 @@ const CODEX_CONTRACT: &str = "portusos-build/components/codex.yaml";
 const BROWSER_COMPONENT_CONTRACT: &str = "portusos-build/components/portus-browser.yaml";
 const PORTUS_MCP_COMPONENT_CONTRACT: &str = "portusos-build/components/portus-mcp.yaml";
 const TUNNEL_CLIENT_COMPONENT_CONTRACT: &str = "portusos-build/components/tunnel-client.yaml";
+const PORTUS_BRIDGE_COMPONENT_CONTRACT: &str = "portusos-build/components/portus-bridge.yaml";
 const STORAGE_CONTRACT: &str = "portusos-build/system/storage.yaml";
 const SERVICE_CONTRACT: &str = "portusos-build/system/base-services.yaml";
 const IDENTITY_CONTRACT: &str = "portusos-build/system/identities.yaml";
@@ -48,7 +49,7 @@ const REQUIRED_SCHEMA_FILES: [&str; 9] = [
     "portusos-build/schemas/validation-report.schema.json",
 ];
 
-const REQUIRED_PACKAGE_IDS: [&str; 25] = [
+const REQUIRED_PACKAGE_IDS: [&str; 26] = [
     "artix-base",
     "linux-lts",
     "linux",
@@ -73,6 +74,7 @@ const REQUIRED_PACKAGE_IDS: [&str; 25] = [
     "portus-browser",
     "portus-mcp",
     "tunnel-client",
+    "portus-bridge",
     "codex",
 ];
 
@@ -307,6 +309,31 @@ struct PortusMcpRuntime {
     tunnel_launcher_source: String,
     default_project_root_template: String,
     subagents_enabled: bool,
+    bundled_required: bool,
+    setup_required: bool,
+    lifecycle_owner: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PortusBridgeContract {
+    schema_version: u32,
+    id: String,
+    source_class: SourceClass,
+    authority: String,
+    source: BrowserSource,
+    runtime: PortusBridgeRuntime,
+    packaging: EvidenceResolution,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PortusBridgeRuntime {
+    executable: String,
+    default_profile: String,
+    policy_path: String,
+    policy_source: String,
+    default_project_root_template: String,
     bundled_required: bool,
     setup_required: bool,
     lifecycle_owner: String,
@@ -758,6 +785,10 @@ pub fn validate_repository(repo_root: &Path) -> ContractResult<ContractReport> {
         load_yaml(repo_root, TUNNEL_CLIENT_COMPONENT_CONTRACT)?;
     validate_tunnel_client(&tunnel_client)?;
 
+    let portus_bridge: PortusBridgeContract =
+        load_yaml(repo_root, PORTUS_BRIDGE_COMPONENT_CONTRACT)?;
+    validate_portus_bridge(repo_root, &portus_bridge)?;
+
     let storage: StorageContract = load_yaml(repo_root, STORAGE_CONTRACT)?;
     validate_storage(&storage)?;
 
@@ -794,6 +825,7 @@ pub fn validate_repository(repo_root: &Path) -> ContractResult<ContractReport> {
     collect_browser_unresolved(&browser_component, &mut unresolved);
     collect_portus_mcp_unresolved(&portus_mcp, &mut unresolved);
     collect_tunnel_client_unresolved(&tunnel_client, &mut unresolved);
+    collect_portus_bridge_unresolved(&portus_bridge, &mut unresolved);
     collect_service_unresolved(&services, &mut unresolved);
     collect_resolved_value(
         "calamares.module-set",
@@ -858,6 +890,7 @@ fn validate_build_contract(repo_root: &Path, contract: &BuildContract) -> Contra
         ("portus_browser", BROWSER_COMPONENT_CONTRACT),
         ("portus_mcp", PORTUS_MCP_COMPONENT_CONTRACT),
         ("tunnel_client", TUNNEL_CLIENT_COMPONENT_CONTRACT),
+        ("portus_bridge", PORTUS_BRIDGE_COMPONENT_CONTRACT),
         ("portus_install", P16_INSTALL_CONTRACT),
         ("storage", STORAGE_CONTRACT),
         ("services", SERVICE_CONTRACT),
@@ -1336,6 +1369,37 @@ fn validate_tunnel_client(contract: &TunnelClientContract) -> ContractResult<()>
         "tunnel-client.artix-compatibility",
         &contract.compatibility.artix,
     )?;
+    Ok(())
+}
+fn validate_portus_bridge(repo_root: &Path, contract: &PortusBridgeContract) -> ContractResult<()> {
+    require_schema(contract.schema_version, PORTUS_BRIDGE_COMPONENT_CONTRACT)?;
+    if contract.id != "portus-bridge"
+        || contract.source_class != SourceClass::PortusOwned
+        || contract.authority != "docs/SYSTEM_CAPABILITIES.md"
+        || contract.source.repository != "https://github.com/PerceivingAI/portus-bridge.git"
+        || !contract.source.source_tree_required_clean
+        || contract.runtime.executable != "/usr/local/bin/portus-bridge"
+        || contract.runtime.default_profile != "portus-bridge"
+        || contract.runtime.policy_path != "/etc/portus/portus-bridge/policy.json"
+        || contract.runtime.policy_source
+            != "portusos-build/rootfs/overlay/etc/portus/portus-bridge/policy.json"
+        || contract.runtime.default_project_root_template != "/workspace/{user}/master"
+        || !contract.runtime.bundled_required
+        || contract.runtime.setup_required
+        || contract.runtime.lifecycle_owner != "master-session"
+    {
+        return invalid(
+            "Portus Bridge component contract conflicts with the system capabilities authority",
+        );
+    }
+    validate_repo_reference(repo_root, &contract.runtime.policy_source)?;
+    validate_resolved_value("portus-bridge.source-revision", &contract.source.revision)?;
+    if let Some(value) = contract.source.revision.value.as_deref()
+        && !is_lower_hex(value, 40)
+    {
+        return invalid("Portus Bridge source revision must be a 40-character lowercase Git SHA-1");
+    }
+    validate_evidence_resolution("portus-bridge.packaging", &contract.packaging)?;
     Ok(())
 }
 
@@ -1902,6 +1966,7 @@ fn scan_machine_contracts_for_secrets(
     paths.insert(BROWSER_COMPONENT_CONTRACT.to_string());
     paths.insert(PORTUS_MCP_COMPONENT_CONTRACT.to_string());
     paths.insert(TUNNEL_CLIENT_COMPONENT_CONTRACT.to_string());
+    paths.insert(PORTUS_BRIDGE_COMPONENT_CONTRACT.to_string());
     paths.insert(CODEX_CONTRACT.to_string());
     paths.insert(PACKAGE_CONTRACT.to_string());
     paths.insert(STORAGE_CONTRACT.to_string());
@@ -2051,6 +2116,17 @@ fn collect_tunnel_client_unresolved(
         &contract.compatibility.artix,
         output,
     );
+}
+fn collect_portus_bridge_unresolved(
+    contract: &PortusBridgeContract,
+    output: &mut Vec<UnresolvedItem>,
+) {
+    collect_resolved_value(
+        "portus-bridge.source-revision",
+        &contract.source.revision,
+        output,
+    );
+    collect_evidence_resolution("portus-bridge.packaging", &contract.packaging, output);
 }
 
 fn collect_service_unresolved(contract: &ServiceContract, output: &mut Vec<UnresolvedItem>) {
@@ -2261,7 +2337,7 @@ mod tests {
         assert!(report.source_valid);
         assert!(!report.release_resolved);
         assert_eq!(report.validation_tests, 38);
-        assert_eq!(report.package_entries, 25);
+        assert_eq!(report.package_entries, 26);
         assert!(
             report
                 .unresolved

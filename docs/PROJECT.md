@@ -88,7 +88,7 @@ The installed system must provide:
 - PortusBrowser as a required bundled browser-control capability;
 - support for additional specialised Portus applications such as PortusWindow;
 - durable state, task, artifact, health, and audit foundations appropriate to unattended operation;
-- remote shell access and future communication adapters;
+- Portus Bridge (`portus-bridge`) and Portus MCP for zero-overhead remote agent access to Master Portus and workspace confinement without whole-system SSH exposure or third-party messaging app dependencies;
 - a minimal graphical presentation and recovery environment;
 - normal Linux recovery paths independent of Master Portus.
 

@@ -1,0 +1,28 @@
+schema_version: 1
+id: portus-bridge
+source_class: portus-owned
+authority: docs/SYSTEM_CAPABILITIES.md
+
+source:
+  repository: https://github.com/PerceivingAI/portus-bridge.git
+  revision:
+    resolution: locked
+    value: 1c244da87a71f00b90e66ec4851ebf0f9b69b3f3
+    required_gate: L2
+  source_tree_required_clean: true
+
+runtime:
+  executable: /usr/local/bin/portus-bridge
+  default_profile: portus-bridge
+  policy_path: /etc/portus/portus-bridge/policy.json
+  policy_source: portusos-build/rootfs/overlay/etc/portus/portus-bridge/policy.json
+  default_project_root_template: /workspace/{user}/master
+  bundled_required: true
+  setup_required: false
+  lifecycle_owner: master-session
+
+packaging:
+  resolution: linux-verified
+  evidence_ref: null
+  unresolved_reason: exact immutable source packaging, cargo release build and Artix live-session launch must be verified in the first interactive ISO
+  required_gate: L2/L5

@@ -11,6 +11,7 @@ contracts:
   portus_browser: portusos-build/components/portus-browser.yaml
   portus_mcp: portusos-build/components/portus-mcp.yaml
   tunnel_client: portusos-build/components/tunnel-client.yaml
+  portus_bridge: portusos-build/components/portus-bridge.yaml
   portus_install: runtime/install/install.toml
   storage: portusos-build/system/storage.yaml
   services: portusos-build/system/base-services.yaml

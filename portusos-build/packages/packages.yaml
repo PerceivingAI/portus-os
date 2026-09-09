@@ -281,6 +281,13 @@ packages:
     profile: base
     component_contract: portusos-build/components/tunnel-client.yaml
 
+  - id: portus-bridge
+    role: remote-agent-bridge
+    source_class: portus-owned
+    required_for_first_iso: true
+    profile: base
+    component_contract: portusos-build/components/portus-bridge.yaml
+
   - id: codex
     role: master-agent-runtime
     source_class: approved-external
