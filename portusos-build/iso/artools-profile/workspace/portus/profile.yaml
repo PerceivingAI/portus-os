@@ -63,6 +63,7 @@ rootfs:
     - xdg-utils
     - gnu-free-fonts
     - artix-grub-live
+    - artix-grub-theme
   packages-init:
     openrc: []
 

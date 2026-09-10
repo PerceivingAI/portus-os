@@ -272,16 +272,25 @@ PORTUS_LIVE_KERNEL_BOOT_BLOCK = '''        # PortusOS installs two kernels, whil
         if "${use_dracut}"; then
 '''
 
-ARTOOLS_GRUB_PREPARE_BLOCK = '''    local lib="$1"/usr/lib/grub
-    local theme="$1"/usr/share/grub
-    local livecfg="$2"/usr/share/grub'''
+ARTOOLS_GRUB_PREPARE_BLOCK = '''    prepare_dir "${grub}"/themes
 
-PORTUS_GRUB_PREPARE_BLOCK = '''    local lib="$1"/usr/lib/grub
-    local theme="$1"/usr/share/grub
-    local livecfg="$2"/usr/share/grub
-    [[ -d "${livecfg}/cfg" ]] || livecfg="${theme}"
-    [[ -d "${theme}/themes/artix" ]] || theme="${livecfg}"'''
+    cp -r "${theme}"/themes/artix "${grub}"/themes
+    cp -r "${livecfg}"/{locales,tz} "${grub}"'''
 
+PORTUS_GRUB_PREPARE_BLOCK = '''    prepare_dir "${grub}"/themes
+
+    for theme_dir in "${theme}"/themes/artix "${livecfg}"/themes/artix; do
+        if [[ -d "${theme_dir}" ]]; then
+            cp -r "${theme_dir}" "${grub}"/themes
+            break
+        fi
+    done
+    for cfg_dir in "${livecfg}" "${theme}"; do
+        if [[ -d "${cfg_dir}"/locales ]] && [[ -d "${cfg_dir}"/tz ]]; then
+            cp -r "${cfg_dir}"/{locales,tz} "${grub}"
+            break
+        fi
+    done'''
 
 def patch_artools_buildiso_text(buildiso_text: str, live_kernel_package: str) -> str:
     """Adapt the verified artools 0.39.1 single-kernel boot path for PortusOS."""
@@ -4216,8 +4225,8 @@ def self_test() -> int:
     patched_grub_fixture = patch_artools_grub_text(
         "prefix\n" + ARTOOLS_GRUB_PREPARE_BLOCK + "\nsuffix\n"
     )
-    assert '[[ -d "${livecfg}/cfg" ]] || livecfg="${theme}"' in patched_grub_fixture
-    assert '[[ -d "${theme}/themes/artix" ]] || theme="${livecfg}"' in patched_grub_fixture
+    assert 'for theme_dir in "${theme}"/themes/artix "${livecfg}"/themes/artix; do' in patched_grub_fixture
+    assert 'for cfg_dir in "${livecfg}" "${theme}"; do' in patched_grub_fixture
     try:
         patch_artools_grub_text("upstream changed")
     except RuntimeError:
