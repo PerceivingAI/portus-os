@@ -272,6 +272,16 @@ PORTUS_LIVE_KERNEL_BOOT_BLOCK = '''        # PortusOS installs two kernels, whil
         if "${use_dracut}"; then
 '''
 
+ARTOOLS_GRUB_PREPARE_BLOCK = '''    local lib="$1"/usr/lib/grub
+    local theme="$1"/usr/share/grub
+    local livecfg="$2"/usr/share/grub'''
+
+PORTUS_GRUB_PREPARE_BLOCK = '''    local lib="$1"/usr/lib/grub
+    local theme="$1"/usr/share/grub
+    local livecfg="$2"/usr/share/grub
+    [[ -d "${livecfg}/cfg" ]] || livecfg="${theme}"
+    [[ -d "${theme}/themes/artix" ]] || theme="${livecfg}"'''
+
 
 def patch_artools_buildiso_text(buildiso_text: str, live_kernel_package: str) -> str:
     """Adapt the verified artools 0.39.1 single-kernel boot path for PortusOS."""
@@ -290,6 +300,17 @@ def patch_artools_buildiso_text(buildiso_text: str, live_kernel_package: str) ->
     return patched
 
 
+def patch_artools_grub_text(grub_text: str) -> str:
+    """Ensure prepare_grub resolves theme and live configs across unmounted overlay boundaries."""
+    occurrences = grub_text.count(ARTOOLS_GRUB_PREPARE_BLOCK)
+    if occurrences != 1:
+        raise RuntimeError(
+            "artools prepare_grub layer contract changed; "
+            f"expected one verified compatibility seam, found {occurrences}"
+        )
+    return grub_text.replace(ARTOOLS_GRUB_PREPARE_BLOCK, PORTUS_GRUB_PREPARE_BLOCK, 1)
+
+
 def apply_artools_live_kernel_compatibility(root: Path, live_kernel_package: str) -> dict[str, str]:
     """Patch only the run-owned Artix build root; never mutate the prepared canonical upper."""
     buildiso = root / "usr/bin/buildiso"
@@ -298,13 +319,19 @@ def apply_artools_live_kernel_compatibility(root: Path, live_kernel_package: str
     original = buildiso.read_text(encoding="utf-8", errors="strict")
     patched = patch_artools_buildiso_text(original, live_kernel_package)
     buildiso.write_text(patched, encoding="utf-8")
+
+    grub_sh = root / "usr/share/artools/lib/iso/grub.sh"
+    if grub_sh.is_file():
+        original_grub = grub_sh.read_text(encoding="utf-8", errors="strict")
+        patched_grub = patch_artools_grub_text(original_grub)
+        grub_sh.write_text(patched_grub, encoding="utf-8")
+
     return {
         "kind": "artools-0.39.1-dual-kernel-live-boot",
         "live_boot_kernel_package": live_kernel_package,
         "source_sha256": hashlib.sha256(original.encode("utf-8")).hexdigest(),
         "patched_sha256": hashlib.sha256(patched.encode("utf-8")).hexdigest(),
     }
-
 
 def run_unattended(command: list[str]) -> subprocess.CompletedProcess[str]:
     """Run a native builder with no readable stdin; unexpected prompts cannot depend on an operator."""
@@ -4186,6 +4213,17 @@ def self_test() -> int:
     assert 'rootfs/boot/vmlinuz* "${iso_root}"/boot/vmlinuz-' not in patched_fixture
     assert 'pkgbase in "${bootfs}"/usr/lib/modules/*/pkgbase' in patched_fixture
     assert '> "${bootfs}/usr/src/linux/version"' in patched_fixture
+    patched_grub_fixture = patch_artools_grub_text(
+        "prefix\n" + ARTOOLS_GRUB_PREPARE_BLOCK + "\nsuffix\n"
+    )
+    assert '[[ -d "${livecfg}/cfg" ]] || livecfg="${theme}"' in patched_grub_fixture
+    assert '[[ -d "${theme}/themes/artix" ]] || theme="${livecfg}"' in patched_grub_fixture
+    try:
+        patch_artools_grub_text("upstream changed")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("changed artools prepare_grub contract must fail closed")
     try:
         patch_artools_buildiso_text("upstream changed", "linux-lts")
     except RuntimeError:
