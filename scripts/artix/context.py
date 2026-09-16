@@ -272,6 +272,19 @@ PORTUS_LIVE_KERNEL_BOOT_BLOCK = '''        # PortusOS installs two kernels, whil
         if "${use_dracut}"; then
 '''
 
+ARTOOLS_GRUB_CFG_BLOCK = '''    prepare_dir "${grub}/${platform}"
+
+    cp "${livecfg}"/cfg/*.cfg "${grub}"'''
+
+PORTUS_GRUB_CFG_BLOCK = '''    prepare_dir "${grub}/${platform}"
+
+    for cfg_dir in "${livecfg}" "${theme}"; do
+        if compgen -G "${cfg_dir}"/cfg/*.cfg >/dev/null; then
+            cp "${cfg_dir}"/cfg/*.cfg "${grub}"
+            break
+        fi
+    done'''
+
 ARTOOLS_GRUB_PREPARE_BLOCK = '''    prepare_dir "${grub}"/themes
 
     cp -r "${theme}"/themes/artix "${grub}"/themes
@@ -311,13 +324,20 @@ def patch_artools_buildiso_text(buildiso_text: str, live_kernel_package: str) ->
 
 def patch_artools_grub_text(grub_text: str) -> str:
     """Ensure prepare_grub resolves theme and live configs across unmounted overlay boundaries."""
-    occurrences = grub_text.count(ARTOOLS_GRUB_PREPARE_BLOCK)
-    if occurrences != 1:
+    occurrences_cfg = grub_text.count(ARTOOLS_GRUB_CFG_BLOCK)
+    if occurrences_cfg != 1:
+        raise RuntimeError(
+            "artools prepare_grub cfg contract changed; "
+            f"expected one verified compatibility seam, found {occurrences_cfg}"
+        )
+    occurrences_prep = grub_text.count(ARTOOLS_GRUB_PREPARE_BLOCK)
+    if occurrences_prep != 1:
         raise RuntimeError(
             "artools prepare_grub layer contract changed; "
-            f"expected one verified compatibility seam, found {occurrences}"
+            f"expected one verified compatibility seam, found {occurrences_prep}"
         )
-    return grub_text.replace(ARTOOLS_GRUB_PREPARE_BLOCK, PORTUS_GRUB_PREPARE_BLOCK, 1)
+    patched = grub_text.replace(ARTOOLS_GRUB_CFG_BLOCK, PORTUS_GRUB_CFG_BLOCK, 1)
+    return patched.replace(ARTOOLS_GRUB_PREPARE_BLOCK, PORTUS_GRUB_PREPARE_BLOCK, 1)
 
 
 def apply_artools_live_kernel_compatibility(root: Path, live_kernel_package: str) -> dict[str, str]:
@@ -4223,10 +4243,11 @@ def self_test() -> int:
     assert 'pkgbase in "${bootfs}"/usr/lib/modules/*/pkgbase' in patched_fixture
     assert '> "${bootfs}/usr/src/linux/version"' in patched_fixture
     patched_grub_fixture = patch_artools_grub_text(
-        "prefix\n" + ARTOOLS_GRUB_PREPARE_BLOCK + "\nsuffix\n"
+        "prefix\n" + ARTOOLS_GRUB_CFG_BLOCK + "\nmiddle\n" + ARTOOLS_GRUB_PREPARE_BLOCK + "\nsuffix\n"
     )
+    assert 'for cfg_dir in "${livecfg}" "${theme}"; do\n        if compgen -G "${cfg_dir}"/cfg/*.cfg >/dev/null; then' in patched_grub_fixture
     assert 'for theme_dir in "${theme}"/themes/artix "${livecfg}"/themes/artix; do' in patched_grub_fixture
-    assert 'for cfg_dir in "${livecfg}" "${theme}"; do' in patched_grub_fixture
+    assert 'for cfg_dir in "${livecfg}" "${theme}"; do\n        if [[ -d "${cfg_dir}"/locales ]] && [[ -d "${cfg_dir}"/tz ]]; then' in patched_grub_fixture
     try:
         patch_artools_grub_text("upstream changed")
     except RuntimeError:
