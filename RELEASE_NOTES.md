@@ -13,7 +13,7 @@ PortusOS 0.1.0 is the first public Technical Preview of a privacy-focused, agent
 - Durable task, state, capability, System Index, artifact, health, event and audit subsystems.
 - X11 + i3 + Alacritty graphical baseline.
 - Chromium-based authentication/browser path and PortusBrowser integration.
-- Optional Portus MCP + OpenAI `tunnel-client` remote connection path.
+- Optional Portus Bridge, Portus MCP, and OpenAI `tunnel-client` remote agent connection paths for zero-overhead remote access without whole-system SSH exposure.
 - GRUB + LUKS2 + LVM encrypted installation design.
 - `linux-lts` normal/live kernel with `linux` installed as an alternate kernel.
 - Deterministic source/build contracts, candidate validation, provenance and signed-checksum release tooling.

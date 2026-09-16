@@ -6,8 +6,7 @@ The core idea is simple: a user gives intent to an agent, and the agent operates
 
 > **Release target:** PortusOS **0.1.0 Technical Preview** for **x86_64 VMware**.
 >
-> **Current status:** the native Artix build path and hardened repository-closure pipeline are implemented and host-safe tested. The next milestone is a canonical native build that passes the completed closure gate, reaches `buildiso`, proves the tracked `memtest86+` correction, and produces the first candidate ISO. **No ISO has been accepted or released yet.**
-
+> **Current status:** The canonical native build harness has successfully produced the first live hybrid bootable ISO (`artix-portus-openrc-20260916-x86_64.iso`, 2.2 GiB) through a fully verified, zero-network repository closure. However, **there is still significant work remaining before public release**: the ISO artifact is currently an unvalidated engineering build. It must undergo full live-session VMware execution, Calamares encrypted-install testing, Codex runtime compatibility verification, and the 38 formal acceptance gates defined in `docs/ACCEPTANCE.md` and `docs/VALIDATION.md`. **No ISO has been accepted or released for public use yet.**
 ## What PortusOS contains
 
 The first Technical Preview is designed around:
@@ -23,7 +22,7 @@ The first Technical Preview is designed around:
 - policy, task, capability, system-index, artifact, health, event, and audit subsystems;
 - protected reusable API credentials through **`portus-apid`**;
 - **PortusBrowser** integration;
-- optional Portus MCP + OpenAI `tunnel-client` remote access;
+- **Portus Bridge** and Portus MCP + OpenAI `tunnel-client` for secure, policy-bounded remote agent communication without whole-system SSH exposure;
 - **Calamares** installation with Portus-owned encrypted-storage integration;
 - deterministic build, validation, provenance, checksum, and release tooling.
 
