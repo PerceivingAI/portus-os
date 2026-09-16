@@ -1,9 +1,9 @@
 # PortusOS ISO Build and Installer Contract
 
-**Last reviewed:** 2026-08-29T09:40:32Z
-**Last updated:** 2026-08-29T09:40:32Z
+**Last reviewed:** 2026-09-16T16:30:00Z
+**Last updated:** 2026-09-16T16:30:00Z
 
-**Status:** Authoritative for the first-ISO `artools`/Calamares architecture and installer engineering baseline; Artix Calamares 3.4.2-4, the verified-gap `portus-storage` module and its runtime target/credential input surface are implemented, while live loading/destructive VM proof and complete native ISO output remain verification
+**Status:** Authoritative for the first-ISO `artools`/Calamares architecture and installer engineering baseline; the first live hybrid bootable ISO (`artix-portus-openrc-20260916-x86_64.iso`, 2.2 GiB) has been successfully built from verified sources under run `20260916T160802Z-8436b6917882-dev-first-live`; Calamares live loading, destructive VM proof and installed boot validation remain the active post-build verification gates
 **Target:** First accepted x86_64 VMware development ISO
 **Acceptance authority:** `docs/ACCEPTANCE.md`
 **Boot/storage authority:** `docs/BOOT_STORAGE_RECOVERY.md`
@@ -93,7 +93,7 @@ The same verified `artools 0.39.1-1` seam also requires `basestrap -c` host-cach
 
 The live medium and installed-system kernel sets intentionally differ. The installable rootfs retains both the normal/default `linux-lts` kernel and alternate `linux` kernel. Verified `artools 0.39.1-1` assumes one rootfs kernel when constructing `/iso/boot`, so the adapter locks `live_boot_kernel_package: linux-lts` and applies a fail-closed compatibility patch only to the run-scoped Artix `buildiso` copy. That patch selects `vmlinuz-linux-lts`, derives its exact module version from the unique `pkgbase=linux-lts` module tree visible in temporary bootfs, and supplies that version only to the temporary live-initramfs path. It does not remove or rewrite either installed kernel.
 
-This kernel compatibility path now has real native evidence. Public run `20260829T060019Z-3afadb080c36-dev-first-live` installed both `linux 7.1.9.artix1-2` and `linux-lts 6.18.46-1`, generated the installed initramfs artifacts, selected the LTS module tree for the live path, and generated `/run/artools/bootfs/boot/initramfs-x86_64.img`. The run then failed at the next bootfs step because `artools 0.39.1-1` attempted to copy `/run/artools/livefs/boot/memtest86+/memtest.bin`. Direct inspection of official Artix `world` package `memtest86+ 7.20-2` proved that it installs exactly `/boot/memtest86+/memtest.bin` (plus its GRUB integration), with no package dependencies. The first-ISO package contract and `packages-boot` therefore now include `memtest86+`; `portus-build` fails closed if the locked `artools 0.39.1` profile omits it. The following canonical run stopped earlier on rolling-repository drift. The closure gate now prevents that drift from reaching `buildiso`, but its first real exercise stopped during mirror-backed package acquisition before a complete local snapshot could be validated. Neither correction is considered empirically complete until acquisition is hardened, a canonical native run produces a passing frozen closure, reaches the memtest bootfs step, and continues through squashfs/final ISO output.
+This kernel compatibility and boot assembly path now has real native evidence. Public run `20260916T160802Z-8436b6917882-dev-first-live` cleanly built the first hybrid bootable ISO artifact (`artix-portus-openrc-20260916-x86_64.iso`, 2.2 GiB). The run verified dual-kernel rootfs installation (`linux-lts` and `linux`), live initramfs assembly, `memtest86+`, and patched `artools` GRUB preparation (`patch_artools_grub_text`) across unmounted overlay boundaries, resolving GRUB configuration templates, themes (`artix-grub-theme`), and fonts (`gnu-free-fonts`) into a self-consistent bootable image.
 
 ## 3. First-ISO installer model
 
